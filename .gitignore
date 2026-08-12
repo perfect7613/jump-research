@@ -18,6 +18,7 @@ venv/
 credentials*.json
 .modal.toml
 .hf_token
+.jump/
 
 # Data, model weights, and large artifacts — released via artifact channels, not git
 data/

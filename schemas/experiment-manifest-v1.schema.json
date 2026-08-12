@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jump-research.invalid/schemas/experiment-manifest-v1.schema.json",
+  "title": "JUMP sequential experiment manifest v1",
+  "type": "object",
+  "required": ["schema_version", "experiment_id", "preregistration", "phases"],
+  "properties": {
+    "schema_version": {"const": "jump.experiments/v1"},
+    "experiment_id": {"$ref": "#/$defs/id"},
+    "description": {"type": "string"},
+    "launch_policy": {
+      "type": "object",
+      "properties": {
+        "allow_full_matrix": {"type": "boolean", "default": false},
+        "allow_h100": {"type": "boolean", "default": false}
+      },
+      "additionalProperties": true
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"$ref": "#/$defs/id"},
+          "required_keys": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "preregistration": {
+      "type": "object",
+      "required": ["layer_allowlist", "timepoint_allowlist"],
+      "properties": {
+        "layer_allowlist": {"type": "array", "minItems": 1, "uniqueItems": true},
+        "timepoint_allowlist": {"type": "array", "minItems": 1, "uniqueItems": true}
+      },
+      "additionalProperties": true
+    },
+    "defaults": {"$ref": "#/$defs/runDefaults"},
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/phase"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "resources": {
+      "type": "object",
+      "required": ["gpu", "timeout_seconds"],
+      "properties": {
+        "gpu": {"enum": ["cpu", "T4", "L4", "A10", "L40S", "A100-80GB", "H100"]},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "max_attempts": {"type": "integer", "minimum": 1, "default": 1},
+        "retry_on_exit_codes": {"type": "array", "items": {"type": "integer"}}
+      },
+      "additionalProperties": true
+    },
+    "runDefaults": {
+      "type": "object",
+      "properties": {"resources": {"$ref": "#/$defs/resources"}, "retry": {"$ref": "#/$defs/retry"}},
+      "additionalProperties": true
+    },
+    "run": {
+      "type": "object",
+      "required": ["id", "task"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "smoke_test": {"type": "boolean", "default": false},
+        "secret": {"$ref": "#/$defs/id"},
+        "task": {
+          "type": "object",
+          "required": ["module"],
+          "properties": {
+            "module": {"type": "string"},
+            "parameters": {"type": "object", "additionalProperties": true}
+          },
+          "additionalProperties": true
+        },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "layers": {"type": "array"},
+            "timepoints": {"type": "array"}
+          },
+          "additionalProperties": true
+        },
+        "resources": {"$ref": "#/$defs/resources"},
+        "retry": {"$ref": "#/$defs/retry"}
+      },
+      "additionalProperties": true
+    },
+    "gate": {
+      "type": "object",
+      "required": ["id", "metric", "operator", "threshold"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "metric": {"type": "string"},
+        "aggregation": {"enum": ["mean", "min", "max"], "default": "mean"},
+        "filters": {"type": "object", "additionalProperties": true},
+        "operator": {"enum": [">", ">=", "<", "<=", "==", "!="]},
+        "threshold": {"type": "number"}
+      },
+      "additionalProperties": true
+    },
+    "phase": {
+      "type": "object",
+      "required": ["id", "budget", "runs"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "depends_on": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "budget": {
+          "type": "object",
+          "required": ["allowed_gpu_types", "max_concurrent_gpus", "max_runtime_seconds", "max_cost_usd", "gpu_hourly_cost_usd"],
+          "properties": {
+            "allowed_gpu_types": {"type": "array", "minItems": 1},
+            "max_concurrent_gpus": {"type": "integer", "minimum": 0, "maximum": 1},
+            "max_runtime_seconds": {"type": "number", "exclusiveMinimum": 0},
+            "max_cost_usd": {"type": "number", "minimum": 0},
+            "gpu_hourly_cost_usd": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}}
+          },
+          "additionalProperties": true
+        },
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+        "gates": {"type": "array", "items": {"$ref": "#/$defs/gate"}},
+        "h100_justification": {
+          "type": "object",
+          "required": [
+            "opt_in",
+            "profile_phase_id",
+            "measured_peak_memory_gb",
+            "measured_runtime_seconds",
+            "why_lower_gpu_insufficient",
+            "forecast_cost_usd",
+            "remaining_budget_usd"
+          ],
+          "properties": {
+            "opt_in": {"const": true},
+            "profile_phase_id": {"$ref": "#/$defs/id"},
+            "measured_peak_memory_gb": {"type": "number", "exclusiveMinimum": 0},
+            "measured_runtime_seconds": {"type": "number", "exclusiveMinimum": 0},
+            "why_lower_gpu_insufficient": {"type": "string", "minLength": 1},
+            "forecast_cost_usd": {"type": "number", "minimum": 0},
+            "remaining_budget_usd": {"type": "number", "minimum": 0}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

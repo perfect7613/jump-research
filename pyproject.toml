@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jump-experiment-runner"
+version = "0.1.0"
+description = "Manifest-driven, sequential Modal experiment automation for JUMP"
+requires-python = ">=3.10"
+dependencies = ["jsonschema>=4.23,<5", "PyYAML>=6.0,<7"]
+
+[project.optional-dependencies]
+modal = ["modal>=1.1,<2"]
+test = ["modal>=1.1,<2", "pytest>=8,<9"]
+
+[project.scripts]
+jump-experiments = "jump_runner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jump_runner = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

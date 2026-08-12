@@ -22,6 +22,23 @@ Overall posture: **CONDITIONAL GO** — go for the vertical slice with honest la
 | [docs/JUMP_REVISED_RESEARCH_PLAN.md](docs/JUMP_REVISED_RESEARCH_PLAN.md) | The authoritative revised plan: two-track split, MVP definitions, architecture, hypotheses H1–H5, condition matrix, budget, phase gates |
 | [docs/JUMP_RISK_REVIEW.md](docs/JUMP_RISK_REVIEW.md) | Red-team risk review (R1–R23, A1–A12): timeline, budget, security, compliance, and overclaim risks with adopted mitigations |
 | [docs/JUMP_VALIDATION_REVIEW.md](docs/JUMP_VALIDATION_REVIEW.md) | Independent validation review (flaws 1–5, sharper plan items 1–8): confound analysis, baseline gaps, scope and metric critiques |
+| [docs/EXPERIMENT_AUTOMATION.md](docs/EXPERIMENT_AUTOMATION.md) | Versioned manifest/result contract and safe sequential Modal runner workflow |
+
+## Experiment runner
+
+The repository now includes a manifest-driven Modal automation package. It
+serializes GPU runs, enforces preregistered layer/timepoint and phase budget
+ceilings before launch, stops on failed gates, and records immutable configs,
+logs, results, artifacts, and checksums. The checked-in example is locked to a
+tiny smoke test; the full paid matrix cannot be submitted accidentally.
+
+```bash
+python -m pip install -e '.[test]'
+pytest
+jump-experiments dry-run examples/smoke-manifest.yaml --smoke
+```
+
+See [the automation guide](docs/EXPERIMENT_AUTOMATION.md) before any Modal use.
 
 ## What this repository will not contain
 

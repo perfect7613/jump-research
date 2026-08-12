@@ -1,0 +1,47 @@
+schema_version: jump.experiments/v1
+experiment_id: modal-runner-smoke
+description: One deterministic protocol check; this is not a research result.
+launch_policy:
+  allow_full_matrix: false
+preregistration:
+  layer_allowlist: [4]
+  timepoint_allowlist: [T4]
+defaults:
+  resources:
+    gpu: T4
+    timeout_seconds: 30
+  retry:
+    max_attempts: 2
+    retry_on_exit_codes: [7]
+phases:
+  - id: protocol-smoke
+    budget:
+      allowed_gpu_types: [T4]
+      max_concurrent_gpus: 1
+      max_runtime_seconds: 60
+      max_cost_usd: 0.02
+      # Pinned planning rate, not a claim about Modal's current list price.
+      gpu_hourly_cost_usd: {T4: 0.59}
+    runs:
+      - id: cpu-protocol-on-gpu
+        smoke_test: true
+        task:
+          module: jump_runner.mock_task
+          parameters:
+            checkpoint_id: mock-v1
+            replication_id: smoke-1
+            split_seed: 7613
+            world_pair_ids: [world-a, world-b]
+            interventions: [none]
+            controls: [deterministic]
+            ood_law_families: []
+            layers: [4]
+            timepoints: [T4]
+            metric_name: smoke_ok
+            metric_value: 1
+    gates:
+      - id: smoke-protocol-passed
+        metric: smoke_ok
+        aggregation: min
+        operator: ">="
+        threshold: 1
