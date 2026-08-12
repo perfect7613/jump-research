@@ -17,6 +17,8 @@ Overall posture: **CONDITIONAL GO** — go for the vertical slice with honest la
 
 | Document | Description |
 |---|---|
+| [docs/JUMP_PRD.md](docs/JUMP_PRD.md) | Implementation-ready PRD for the benchmark/instrument and gated mechanism study, including exact metrics, causal controls, artifacts, budgets, and pass/pivot/kill rules |
+| [docs/schemas/jump-experiment-manifest.schema.json](docs/schemas/jump-experiment-manifest.schema.json) | Machine-executable JSON Schema for preregistered, sequential, resumable experiment manifests |
 | [docs/JUMP_REVISED_RESEARCH_PLAN.md](docs/JUMP_REVISED_RESEARCH_PLAN.md) | The authoritative revised plan: two-track split, MVP definitions, architecture, hypotheses H1–H5, condition matrix, budget, phase gates |
 | [docs/JUMP_RISK_REVIEW.md](docs/JUMP_RISK_REVIEW.md) | Red-team risk review (R1–R23, A1–A12): timeline, budget, security, compliance, and overclaim risks with adopted mitigations |
 | [docs/JUMP_VALIDATION_REVIEW.md](docs/JUMP_VALIDATION_REVIEW.md) | Independent validation review (flaws 1–5, sharper plan items 1–8): confound analysis, baseline gaps, scope and metric critiques |
