@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+.ipynb_checkpoints/
+
+# Environments & secrets — never commit credentials
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+.modal.toml
+.hf_token
+
+# Data, model weights, and large artifacts — released via artifact channels, not git
+data/
+datasets/
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.npz
+*.h5
+weights/
+checkpoints/
+outputs/
+runs/
+wandb/
+
+# Caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
