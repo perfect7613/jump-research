@@ -1,0 +1,201 @@
+{
+  "schema_version": "jump.experiments/v1",
+  "experiment_id": "mechanistic-gpu-profile",
+  "description": "Locked CPU/L40S/A100 profiling plan; contains no H100 run.",
+  "launch_policy": {
+    "allow_full_matrix": false,
+    "allow_h100": false
+  },
+  "preregistration": {
+    "layer_allowlist": [
+      "model.layers.8",
+      "model.layers.16",
+      "model.layers.24",
+      "model.layers.32"
+    ],
+    "timepoint_allowlist": [
+      "T0",
+      "T1",
+      "T2",
+      "T3",
+      "T4"
+    ]
+  },
+  "defaults": {
+    "retry": {
+      "max_attempts": 1
+    }
+  },
+  "phases": [
+    {
+      "id": "cpu-contract-smoke",
+      "depends_on": [],
+      "budget": {
+        "allowed_gpu_types": [
+          "cpu"
+        ],
+        "max_concurrent_gpus": 0,
+        "max_runtime_seconds": 60,
+        "max_cost_usd": 0,
+        "gpu_hourly_cost_usd": {
+          "cpu": 0
+        }
+      },
+      "runs": [
+        {
+          "id": "synthetic-contract",
+          "smoke_test": true,
+          "resources": {
+            "gpu": "cpu",
+            "timeout_seconds": 60
+          },
+          "task": {
+            "module": "jump_mechanistic.runner",
+            "parameters": {
+              "task": "mechanistic_suite.synthetic",
+              "seed": 17,
+              "allowed_exponents": [1, 2, 3],
+              "checkpoint_id": "checkpoint-primary",
+              "checkpoint_revision": "model-revision-primary-v1",
+              "checkpoint_tokenizer_revision": "tokenizer-revision-v1",
+              "checkpoint_training_lineage_id": "lineage-primary",
+              "checkpoint_sha256": "fa6338605480ecab830cc719b1c9987602adacd3a02f0b3bdab2d3d9dfc254bd",
+              "replication_id": "checkpoint-replication",
+              "replication_revision": "model-revision-replication-v2",
+              "replication_tokenizer_revision": "tokenizer-revision-v2",
+              "replication_training_lineage_id": "lineage-independent-replication",
+              "replication_sha256": "acebd9038ca2f28cfe03af5245d820bf42a1d86a463be85c41489a3805805fd6"
+            }
+          },
+          "selection": {
+            "layers": [
+              "model.layers.8"
+            ],
+            "timepoints": [
+              "T0",
+              "T1",
+              "T2",
+              "T3",
+              "T4"
+            ]
+          }
+        }
+      ],
+      "gates": [
+        {
+          "id": "cpu-contract-passed",
+          "metric": "activation_capture.count",
+          "aggregation": "max",
+          "operator": ">",
+          "threshold": 0
+        }
+      ]
+    },
+    {
+      "id": "gpu-memory-profile",
+      "depends_on": [
+        "cpu-contract-smoke"
+      ],
+      "budget": {
+        "allowed_gpu_types": [
+          "L40S",
+          "A100-80GB"
+        ],
+        "max_concurrent_gpus": 1,
+        "max_runtime_seconds": 1500,
+        "max_cost_usd": 0.95,
+        "gpu_hourly_cost_usd": {
+          "L40S": 1.9512,
+          "A100-80GB": 2.4984
+        }
+      },
+      "runs": [
+        {
+          "id": "l40s-one-percent-hook-smoke",
+          "smoke_test": true,
+          "resources": {
+            "gpu": "L40S",
+            "timeout_seconds": 600
+          },
+          "task": {
+            "module": "jump_model_jobs.activation_profile",
+            "parameters": {
+              "checkpoint_id": "gemma-4-12b-research",
+              "checkpoint_revision": "gemma-4-12b-research@immutable-revision",
+              "workload": "activation_capture",
+              "sample_fraction": 0.01,
+              "batch_size": 1,
+              "emit_peak_memory": true,
+              "emit_projected_tier_runtimes": true
+            }
+          },
+          "selection": {
+            "layers": [
+              "model.layers.8",
+              "model.layers.16",
+              "model.layers.24",
+              "model.layers.32"
+            ],
+            "timepoints": [
+              "T0",
+              "T1",
+              "T2",
+              "T3",
+              "T4"
+            ]
+          }
+        },
+        {
+          "id": "a100-throughput-profile",
+          "resources": {
+            "gpu": "A100-80GB",
+            "timeout_seconds": 900
+          },
+          "task": {
+            "module": "jump_model_jobs.activation_profile",
+            "parameters": {
+              "checkpoint_id": "gemma-4-12b-research",
+              "checkpoint_revision": "gemma-4-12b-research@immutable-revision",
+              "workload": "activation_capture",
+              "sample_fraction": 0.01,
+              "batch_size": 1,
+              "emit_peak_memory": true,
+              "emit_projected_tier_runtimes": true
+            }
+          },
+          "selection": {
+            "layers": [
+              "model.layers.8",
+              "model.layers.16",
+              "model.layers.24",
+              "model.layers.32"
+            ],
+            "timepoints": [
+              "T0",
+              "T1",
+              "T2",
+              "T3",
+              "T4"
+            ]
+          }
+        }
+      ],
+      "gates": [
+        {
+          "id": "hook-integrity",
+          "metric": "activation_hash_match_rate",
+          "aggregation": "min",
+          "operator": "==",
+          "threshold": 1
+        },
+        {
+          "id": "profile-complete",
+          "metric": "hardware_profile_complete",
+          "aggregation": "min",
+          "operator": "==",
+          "threshold": 1
+        }
+      ]
+    }
+  ]
+}

@@ -56,6 +56,29 @@ Metric records support `{name,value,split,condition,checkpoint_id,world_pair_id,
 timepoint,layer,ci}`. Output layer/timepoint values are validated again against
 the preregistration, so a buggy task cannot widen the study after launch.
 
+### Mechanistic analysis task
+
+`jump_mechanistic.runner` implements the subprocess contract above and checks
+the immutable run config before capturing activations. Its CPU-first primitives
+cover strict layer/T0--T4 capture, exact behavioral scoring, episode/world-group
+held-out probes, leave-one-law-family-out evaluation, matched World A/B swaps,
+ablation/injection with matched-norm, orthogonal and generic-error controls,
+paired causal effects, mediation specificity, and two-checkpoint replication.
+The packaged synthetic fixture verifies plumbing, not a scientific claim.
+
+```json
+{
+  "task": {
+    "module": "jump_mechanistic.runner",
+    "parameters": {"task": "mechanistic_suite.synthetic", "seed": 17}
+  },
+  "selection": {
+    "layers": ["model.layers.8"],
+    "timepoints": ["T0", "T1", "T2", "T3", "T4"]
+  }
+}
+```
+
 ## Local workflow (no paid compute)
 
 ```bash
@@ -65,11 +88,13 @@ jump-experiments plan examples/smoke-manifest.yaml --smoke
 jump-experiments dry-run examples/smoke-manifest.yaml --smoke
 jump-experiments run-local examples/smoke-manifest.yaml --smoke --runs-dir /tmp/jump-runs
 jump-experiments status examples/smoke-manifest.yaml --smoke --runs-dir /tmp/jump-runs
+jump-experiments run-local examples/mechanistic-synthetic.manifest.json --smoke --runs-dir /tmp/jump-mechanistic
 ```
 
-`run-local` is smoke-only and uses the deterministic CPU mock. Verification is
-run in a fresh local virtual environment and makes no GPU calls; this repository
-does not consume hosted Actions minutes for the runner suite.
+`run-local` is smoke-only. The examples above use deterministic CPU tasks:
+the runner protocol mock and the mechanistic fixture suite. Verification is run
+in a fresh local virtual environment and makes no GPU calls; this repository
+does not consume hosted Actions minutes for the test suite.
 
 ## Modal deployment and smoke
 
@@ -167,3 +192,49 @@ four approvals: `launch_policy.allow_full_matrix: true`, `--confirm-paid`,
 `launch_policy.allow_h100: true`, and `--confirm-h100`. Keep both policy flags
 false until the manifest, measurements, and forecast are reviewed and approved.
 Declaring or deploying the H100 function does not execute it.
+
+Use CPU for scoring/probes/mediation, L40S for the 1% hook and memory smoke,
+and A100-80GB as the default large-memory tier for full allowlisted capture.
+No current phase requires H100. The checked-in H100 template is intentionally
+launch-locked and H100 is considered only when sealed L40S and completed A100
+profiles show all of the following: peak memory at most 72 GiB, A100 misses the
+runtime ceiling, projected H100 speedup is at least 1.25x, and retry-aware cost
+fits remaining budget. Above 72 GiB, reduce batch/context, stream, checkpoint,
+or shard; H100 and A100-80GB have the same nominal memory capacity.
+
+The valid no-H100 profile plan is
+`examples/mechanistic-gpu-profile.manifest.json`. After its gated profile,
+materialize the separate locked template from the two completed runner results:
+
+```bash
+python -m jump_mechanistic.hardware \
+  --template examples/mechanistic-h100-escalation.manifest.template.json \
+  --l40s-result /runs/l40s-one-percent-hook-smoke/result.json \
+  --a100-result /runs/a100-throughput-profile/result.json \
+  --output /tmp/reviewed-h100-manifest.json
+```
+
+At the materialization boundary, the loader rereads both paths, recomputes the
+referenced artifact hashes, verifies each result's runner checksum manifest and
+immutable config, and requires matching manifest, code version, workload,
+checkpoint revision, and distinct L40S/A100 run IDs. The immutable profile phase
+result must exist, have `status: passed`, and report every declared gate passed.
+Materialization records those bindings (including the phase-result digest),
+calculates the exact forecast, and preserves both launch flags as false. It does
+not accept a previously loaded or caller-modified evidence object. A human
+review is still required before either flag is changed.
+
+### Confirmatory statistics and gates
+
+Behavioral outputs use the locked six-object partition denominator, explicit
+exponent allowlist, and adequacy balanced accuracy. Probe sample IDs are unique;
+each episode/world group belongs to one law family, and OOD train/test groups
+must be disjoint. Confirmatory paired and mediation intervals are deterministic
+95% percentile intervals from exactly 10,000 episode/world-seed cluster
+resamples; artifacts record the seed, cluster count, and resample count.
+
+G6 requires positive TE and both ordered NIE lower bounds, mediated proportion
+at least 20%, and specificity. G7 requires positive OOD causal effect, at least
+50% retention, and 100% provenance. G8 requires G3/G5 plus all of those
+conditions on an immutable, independently revised second checkpoint. Missing,
+partial, single-checkpoint, or aliased evidence fails closed.

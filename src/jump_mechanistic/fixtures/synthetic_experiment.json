@@ -1,0 +1,2022 @@
+{
+  "activations": [
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T0",
+      "values": [
+        0.0,
+        0.0,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T1",
+      "values": [
+        0.1,
+        0.2,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T2",
+      "values": [
+        0.2,
+        0.4,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T3",
+      "values": [
+        0.30000000000000004,
+        0.6000000000000001,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T4",
+      "values": [
+        0.4,
+        0.8,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T0",
+      "values": [
+        0.0,
+        1.0,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T1",
+      "values": [
+        0.1,
+        1.2,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T2",
+      "values": [
+        0.2,
+        1.4,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T3",
+      "values": [
+        0.30000000000000004,
+        1.6,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-0",
+      "labels": {
+        "law_family": "inverse_square",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T4",
+      "values": [
+        0.4,
+        1.8,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T0",
+      "values": [
+        1.0,
+        0.0,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T1",
+      "values": [
+        1.1,
+        0.2,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T2",
+      "values": [
+        1.2,
+        0.4,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T3",
+      "values": [
+        1.3,
+        0.6000000000000001,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T4",
+      "values": [
+        1.4,
+        0.8,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T0",
+      "values": [
+        1.0,
+        1.0,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T1",
+      "values": [
+        1.1,
+        1.2,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T2",
+      "values": [
+        1.2,
+        1.4,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T3",
+      "values": [
+        1.3,
+        1.6,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-1",
+      "labels": {
+        "law_family": "inverse_cube",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T4",
+      "values": [
+        1.4,
+        1.8,
+        -0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T0",
+      "values": [
+        2.0,
+        0.0,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 0
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T1",
+      "values": [
+        2.1,
+        0.2,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T2",
+      "values": [
+        2.2,
+        0.4,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T3",
+      "values": [
+        2.3,
+        0.6000000000000001,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.4",
+      "timepoint": "T4",
+      "values": [
+        2.4,
+        0.8,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T0",
+      "values": [
+        2.0,
+        1.0,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 0
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T1",
+      "values": [
+        2.1,
+        1.2,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T2",
+      "values": [
+        2.2,
+        1.4,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T3",
+      "values": [
+        2.3,
+        1.6,
+        0.3
+      ]
+    },
+    {
+      "checkpoint_id": "synthetic-primary",
+      "episode_id": "episode-2",
+      "labels": {
+        "law_family": "spring",
+        "mismatch": 1
+      },
+      "layer": "model.layers.8",
+      "timepoint": "T4",
+      "values": [
+        2.4,
+        1.8,
+        0.3
+      ]
+    }
+  ],
+  "allowed_exponents": [
+    1,
+    2,
+    3
+  ],
+  "behavior": [
+    {
+      "prediction": {
+        "adequate": false,
+        "confidence": 0.9,
+        "forces": [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      },
+      "target": {
+        "adequate": false,
+        "control_no_hidden_types": false,
+        "forces": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      }
+    },
+    {
+      "prediction": {
+        "adequate": false,
+        "confidence": 0.8,
+        "forces": [
+          [
+            0.8,
+            0
+          ],
+          [
+            0,
+            -1.2
+          ]
+        ],
+        "partition": [
+          1,
+          1,
+          0,
+          0,
+          1,
+          0
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      },
+      "target": {
+        "adequate": false,
+        "control_no_hidden_types": false,
+        "forces": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      }
+    },
+    {
+      "prediction": {
+        "adequate": true,
+        "confidence": 0.2,
+        "forces": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "partition": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "attract",
+          "exponent": 2,
+          "same": "repel"
+        }
+      },
+      "target": {
+        "adequate": false,
+        "control_no_hidden_types": false,
+        "forces": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      }
+    },
+    {
+      "prediction": {
+        "adequate": true,
+        "confidence": 0.95,
+        "forces": [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "posits_hidden_types": false,
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      },
+      "target": {
+        "adequate": true,
+        "control_no_hidden_types": true,
+        "forces": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0
+          ]
+        ],
+        "partition": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          1
+        ],
+        "replacement_law": {
+          "different": "repel",
+          "exponent": 2,
+          "same": "attract"
+        }
+      }
+    }
+  ],
+  "checkpoint_effects": {
+    "checkpoint-primary": {
+      "cluster_ids": [
+        "checkpoint-primary-world-0",
+        "checkpoint-primary-world-0",
+        "checkpoint-primary-world-1",
+        "checkpoint-primary-world-1",
+        "checkpoint-primary-world-2",
+        "checkpoint-primary-world-2",
+        "checkpoint-primary-world-3",
+        "checkpoint-primary-world-3",
+        "checkpoint-primary-world-4",
+        "checkpoint-primary-world-4",
+        "checkpoint-primary-world-5",
+        "checkpoint-primary-world-5"
+      ],
+      "control": [
+        0.1,
+        0.2,
+        0.15,
+        0.25,
+        0.18,
+        0.3,
+        0.12,
+        0.22,
+        0.19,
+        0.24,
+        0.14,
+        0.27
+      ],
+      "treated": [
+        0.62,
+        0.69,
+        0.66,
+        0.75,
+        0.71,
+        0.78,
+        0.63,
+        0.72,
+        0.71,
+        0.73,
+        0.65,
+        0.77
+      ]
+    },
+    "checkpoint-replication": {
+      "cluster_ids": [
+        "checkpoint-replication-world-0",
+        "checkpoint-replication-world-0",
+        "checkpoint-replication-world-1",
+        "checkpoint-replication-world-1",
+        "checkpoint-replication-world-2",
+        "checkpoint-replication-world-2",
+        "checkpoint-replication-world-3",
+        "checkpoint-replication-world-3",
+        "checkpoint-replication-world-4",
+        "checkpoint-replication-world-4",
+        "checkpoint-replication-world-5",
+        "checkpoint-replication-world-5"
+      ],
+      "control": [
+        0.1,
+        0.2,
+        0.15,
+        0.25,
+        0.18,
+        0.3,
+        0.12,
+        0.22,
+        0.19,
+        0.24,
+        0.14,
+        0.27
+      ],
+      "treated": [
+        0.56,
+        0.65,
+        0.58,
+        0.72,
+        0.63,
+        0.76,
+        0.56,
+        0.6900000000000001,
+        0.64,
+        0.7,
+        0.5800000000000001,
+        0.74
+      ]
+    }
+  },
+  "checkpoint_gate_inputs": {
+    "checkpoint-primary": {
+      "g3_passed": true,
+      "g5_passed": true,
+      "provenance_hash_match_rate": 1.0
+    },
+    "checkpoint-replication": {
+      "g3_passed": true,
+      "g5_passed": true,
+      "provenance_hash_match_rate": 1.0
+    }
+  },
+  "checkpoint_identities": {
+    "checkpoint-primary": {
+      "checkpoint_id": "checkpoint-primary",
+      "checkpoint_sha256": "fa6338605480ecab830cc719b1c9987602adacd3a02f0b3bdab2d3d9dfc254bd",
+      "model_revision": "model-revision-primary-v1",
+      "tokenizer_revision": "tokenizer-revision-v1",
+      "training_lineage_id": "lineage-primary"
+    },
+    "checkpoint-replication": {
+      "checkpoint_id": "checkpoint-replication",
+      "checkpoint_sha256": "acebd9038ca2f28cfe03af5245d820bf42a1d86a463be85c41489a3805805fd6",
+      "model_revision": "model-revision-replication-v2",
+      "tokenizer_revision": "tokenizer-revision-v2",
+      "training_lineage_id": "lineage-independent-replication"
+    }
+  },
+  "directions": {
+    "activation": [
+      2.0,
+      -1.0,
+      0.5
+    ],
+    "generic_error": [
+      0.2,
+      -0.1,
+      0.4
+    ],
+    "target": [
+      1.0,
+      2.0,
+      -1.0
+    ]
+  },
+  "intervention_cluster_ids": [
+    "intervention-world-0",
+    "intervention-world-0",
+    "intervention-world-1",
+    "intervention-world-1",
+    "intervention-world-2",
+    "intervention-world-2",
+    "intervention-world-3",
+    "intervention-world-3",
+    "intervention-world-4",
+    "intervention-world-4",
+    "intervention-world-5",
+    "intervention-world-5"
+  ],
+  "intervention_outcomes": {
+    "baseline": [
+      0.1,
+      0.2,
+      0.15,
+      0.25,
+      0.18,
+      0.3,
+      0.12,
+      0.22,
+      0.19,
+      0.24,
+      0.14,
+      0.27
+    ],
+    "generic_error": [
+      0.14,
+      0.22,
+      0.18,
+      0.26,
+      0.19999999999999998,
+      0.33999999999999997,
+      0.13,
+      0.25,
+      0.21,
+      0.27,
+      0.15000000000000002,
+      0.29000000000000004
+    ],
+    "matched_norm": [
+      0.12000000000000001,
+      0.19,
+      0.18,
+      0.25,
+      0.19,
+      0.32,
+      0.09999999999999999,
+      0.23,
+      0.19,
+      0.26,
+      0.13,
+      0.28
+    ],
+    "orthogonal": [
+      0.09000000000000001,
+      0.21000000000000002,
+      0.15,
+      0.27,
+      0.16,
+      0.3,
+      0.13,
+      0.21,
+      0.2,
+      0.24,
+      0.16,
+      0.26
+    ],
+    "target": [
+      0.5,
+      0.7,
+      0.6,
+      0.8,
+      0.6799999999999999,
+      0.8999999999999999,
+      0.54,
+      0.74,
+      0.6699999999999999,
+      0.75,
+      0.6000000000000001,
+      0.85
+    ]
+  },
+  "mediation": {
+    "checkpoint-primary": {
+      "cluster_ids": [
+        "checkpoint-primary-world-0",
+        "checkpoint-primary-world-0",
+        "checkpoint-primary-world-1",
+        "checkpoint-primary-world-1",
+        "checkpoint-primary-world-2",
+        "checkpoint-primary-world-2",
+        "checkpoint-primary-world-3",
+        "checkpoint-primary-world-3",
+        "checkpoint-primary-world-4",
+        "checkpoint-primary-world-4",
+        "checkpoint-primary-world-5",
+        "checkpoint-primary-world-5",
+        "checkpoint-primary-world-6",
+        "checkpoint-primary-world-6",
+        "checkpoint-primary-world-7",
+        "checkpoint-primary-world-7",
+        "checkpoint-primary-world-8",
+        "checkpoint-primary-world-8",
+        "checkpoint-primary-world-9",
+        "checkpoint-primary-world-9",
+        "checkpoint-primary-world-10",
+        "checkpoint-primary-world-10",
+        "checkpoint-primary-world-11",
+        "checkpoint-primary-world-11",
+        "checkpoint-primary-world-12",
+        "checkpoint-primary-world-12",
+        "checkpoint-primary-world-13",
+        "checkpoint-primary-world-13",
+        "checkpoint-primary-world-14",
+        "checkpoint-primary-world-14",
+        "checkpoint-primary-world-15",
+        "checkpoint-primary-world-15",
+        "checkpoint-primary-world-16",
+        "checkpoint-primary-world-16",
+        "checkpoint-primary-world-17",
+        "checkpoint-primary-world-17",
+        "checkpoint-primary-world-18",
+        "checkpoint-primary-world-18",
+        "checkpoint-primary-world-19",
+        "checkpoint-primary-world-19"
+      ],
+      "mediator": [
+        -0.1,
+        0.89,
+        -0.04,
+        0.95,
+        0.02,
+        0.79,
+        0.08,
+        0.85,
+        -0.08,
+        0.9099999999999999,
+        -0.02,
+        0.75,
+        0.04,
+        0.8099999999999999,
+        0.1,
+        0.87,
+        -0.06,
+        0.9299999999999999,
+        0.0,
+        0.77,
+        0.06,
+        0.83,
+        -0.1,
+        0.89,
+        -0.04,
+        0.95,
+        0.02,
+        0.79,
+        0.08,
+        0.85,
+        -0.08,
+        0.9099999999999999,
+        -0.02,
+        0.75,
+        0.04,
+        0.8099999999999999,
+        0.1,
+        0.87,
+        -0.06,
+        0.9299999999999999
+      ],
+      "outcome": [
+        -0.21000000000000002,
+        1.439,
+        -0.0040000000000000036,
+        1.4825,
+        0.03950000000000001,
+        1.3915000000000002,
+        0.08300000000000002,
+        1.435,
+        -0.1705,
+        1.4785,
+        0.0355,
+        1.225,
+        0.07900000000000001,
+        1.2685,
+        0.12250000000000001,
+        1.4745000000000001,
+        -0.131,
+        1.518,
+        0.075,
+        1.2645000000000002,
+        0.1185,
+        1.308,
+        -0.135,
+        1.514,
+        -0.0915,
+        1.5574999999999999,
+        -0.047999999999999994,
+        1.3040000000000003,
+        0.15800000000000003,
+        1.3475,
+        -0.09550000000000002,
+        1.5534999999999999,
+        -0.052000000000000005,
+        1.3000000000000003,
+        -0.008499999999999994,
+        1.3435,
+        0.1975,
+        1.387,
+        -0.056,
+        1.4305
+      ],
+      "promotion_mediator": [
+        -0.105,
+        0.8029,
+        -0.0364,
+        0.8715,
+        0.0322,
+        0.7049,
+        0.0658,
+        0.7735,
+        -0.0658,
+        0.8421,
+        -0.0322,
+        0.6755,
+        0.0364,
+        0.7441,
+        0.105,
+        0.7777,
+        -0.0616,
+        0.8463,
+        0.007,
+        0.7147,
+        0.0406,
+        0.7483,
+        -0.091,
+        0.8169,
+        -0.0224,
+        0.8505,
+        0.0112,
+        0.7189,
+        0.0798,
+        0.7875,
+        -0.0868,
+        0.8211,
+        -0.0182,
+        0.6895,
+        0.0504,
+        0.7231,
+        0.084,
+        0.7917,
+        -0.0476,
+        0.8603
+      ],
+      "specificity_controls": {
+        "negation": [
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37
+        ],
+        "surprise": [
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4
+        ],
+        "uncertainty": [
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333
+        ]
+      },
+      "treatment": [
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    "checkpoint-replication": {
+      "cluster_ids": [
+        "checkpoint-replication-world-0",
+        "checkpoint-replication-world-0",
+        "checkpoint-replication-world-1",
+        "checkpoint-replication-world-1",
+        "checkpoint-replication-world-2",
+        "checkpoint-replication-world-2",
+        "checkpoint-replication-world-3",
+        "checkpoint-replication-world-3",
+        "checkpoint-replication-world-4",
+        "checkpoint-replication-world-4",
+        "checkpoint-replication-world-5",
+        "checkpoint-replication-world-5",
+        "checkpoint-replication-world-6",
+        "checkpoint-replication-world-6",
+        "checkpoint-replication-world-7",
+        "checkpoint-replication-world-7",
+        "checkpoint-replication-world-8",
+        "checkpoint-replication-world-8",
+        "checkpoint-replication-world-9",
+        "checkpoint-replication-world-9",
+        "checkpoint-replication-world-10",
+        "checkpoint-replication-world-10",
+        "checkpoint-replication-world-11",
+        "checkpoint-replication-world-11",
+        "checkpoint-replication-world-12",
+        "checkpoint-replication-world-12",
+        "checkpoint-replication-world-13",
+        "checkpoint-replication-world-13",
+        "checkpoint-replication-world-14",
+        "checkpoint-replication-world-14",
+        "checkpoint-replication-world-15",
+        "checkpoint-replication-world-15",
+        "checkpoint-replication-world-16",
+        "checkpoint-replication-world-16",
+        "checkpoint-replication-world-17",
+        "checkpoint-replication-world-17",
+        "checkpoint-replication-world-18",
+        "checkpoint-replication-world-18",
+        "checkpoint-replication-world-19",
+        "checkpoint-replication-world-19"
+      ],
+      "mediator": [
+        -0.15000000000000002,
+        0.89,
+        0.010000000000000002,
+        0.8999999999999999,
+        0.02,
+        0.8400000000000001,
+        0.03,
+        0.85,
+        -0.03,
+        0.8599999999999999,
+        -0.02,
+        0.8,
+        -0.010000000000000002,
+        0.8099999999999999,
+        0.15000000000000002,
+        0.82,
+        -0.06,
+        0.98,
+        -0.05,
+        0.77,
+        0.11,
+        0.7799999999999999,
+        -0.1,
+        0.9400000000000001,
+        -0.09,
+        0.95,
+        0.07,
+        0.74,
+        0.08,
+        0.9,
+        -0.13,
+        0.9099999999999999,
+        0.030000000000000002,
+        0.7,
+        0.04,
+        0.86,
+        0.05,
+        0.87,
+        -0.009999999999999995,
+        0.8799999999999999
+      ],
+      "outcome": [
+        -0.2775,
+        1.439,
+        0.0635,
+        1.4149999999999998,
+        0.03950000000000001,
+        1.459,
+        0.0155,
+        1.435,
+        -0.10300000000000001,
+        1.4109999999999998,
+        0.0355,
+        1.2925,
+        0.011499999999999998,
+        1.2685,
+        0.19000000000000003,
+        1.407,
+        -0.131,
+        1.5855,
+        0.007499999999999993,
+        1.2645000000000002,
+        0.18600000000000003,
+        1.2405,
+        -0.135,
+        1.5815000000000001,
+        -0.159,
+        1.5574999999999999,
+        0.019500000000000017,
+        1.2365000000000002,
+        0.15800000000000003,
+        1.415,
+        -0.163,
+        1.5534999999999999,
+        0.015500000000000007,
+        1.2325,
+        -0.008499999999999994,
+        1.411,
+        0.13,
+        1.387,
+        0.011500000000000007,
+        1.363
+      ],
+      "promotion_mediator": [
+        -0.1505,
+        0.8029,
+        0.0091,
+        0.826,
+        0.0322,
+        0.7504,
+        0.0203,
+        0.7735,
+        -0.0203,
+        0.7966,
+        -0.0322,
+        0.721,
+        -0.0091,
+        0.7441,
+        0.1505,
+        0.7322,
+        -0.0616,
+        0.8918,
+        -0.0385,
+        0.7147,
+        0.0861,
+        0.7028,
+        -0.091,
+        0.8624,
+        -0.0679,
+        0.8505,
+        0.0567,
+        0.6734,
+        0.0798,
+        0.833,
+        -0.1323,
+        0.8211,
+        0.0273,
+        0.644,
+        0.0504,
+        0.7686,
+        0.0385,
+        0.7917,
+        -0.0021,
+        0.8148
+      ],
+      "specificity_controls": {
+        "negation": [
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37,
+          -0.4,
+          -0.37,
+          0.37,
+          0.4,
+          -0.37,
+          -0.43000000000000005,
+          0.4,
+          0.43000000000000005,
+          -0.43000000000000005,
+          -0.4,
+          0.43000000000000005,
+          0.37
+        ],
+        "surprise": [
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4,
+          -0.4,
+          0.2,
+          -0.6,
+          0.0,
+          0.6,
+          -0.2,
+          0.4
+        ],
+        "uncertainty": [
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333,
+          -0.3333333333333333,
+          0.5,
+          -0.16666666666666666,
+          0.6666666666666666,
+          0.0,
+          -0.6666666666666666,
+          0.16666666666666666,
+          -0.5,
+          0.3333333333333333
+        ]
+      },
+      "treatment": [
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1
+      ]
+    }
+  },
+  "ood_checkpoint_effects": {
+    "checkpoint-primary": {
+      "cluster_ids": [
+        "checkpoint-primary-ood-world-0",
+        "checkpoint-primary-ood-world-0",
+        "checkpoint-primary-ood-world-1",
+        "checkpoint-primary-ood-world-1",
+        "checkpoint-primary-ood-world-2",
+        "checkpoint-primary-ood-world-2",
+        "checkpoint-primary-ood-world-3",
+        "checkpoint-primary-ood-world-3",
+        "checkpoint-primary-ood-world-4",
+        "checkpoint-primary-ood-world-4",
+        "checkpoint-primary-ood-world-5",
+        "checkpoint-primary-ood-world-5"
+      ],
+      "control": [
+        0.1,
+        0.2,
+        0.15,
+        0.25,
+        0.18,
+        0.3,
+        0.12,
+        0.22,
+        0.19,
+        0.24,
+        0.14,
+        0.27
+      ],
+      "treated": [
+        0.41200000000000003,
+        0.49399999999999994,
+        0.45599999999999996,
+        0.55,
+        0.498,
+        0.5880000000000001,
+        0.426,
+        0.52,
+        0.502,
+        0.534,
+        0.446,
+        0.5700000000000001
+      ]
+    },
+    "checkpoint-replication": {
+      "cluster_ids": [
+        "checkpoint-replication-ood-world-0",
+        "checkpoint-replication-ood-world-0",
+        "checkpoint-replication-ood-world-1",
+        "checkpoint-replication-ood-world-1",
+        "checkpoint-replication-ood-world-2",
+        "checkpoint-replication-ood-world-2",
+        "checkpoint-replication-ood-world-3",
+        "checkpoint-replication-ood-world-3",
+        "checkpoint-replication-ood-world-4",
+        "checkpoint-replication-ood-world-4",
+        "checkpoint-replication-ood-world-5",
+        "checkpoint-replication-ood-world-5"
+      ],
+      "control": [
+        0.1,
+        0.2,
+        0.15,
+        0.25,
+        0.18,
+        0.3,
+        0.12,
+        0.22,
+        0.19,
+        0.24,
+        0.14,
+        0.27
+      ],
+      "treated": [
+        0.399,
+        0.49250000000000005,
+        0.4295,
+        0.5555,
+        0.47250000000000003,
+        0.599,
+        0.406,
+        0.5255000000000001,
+        0.48250000000000004,
+        0.5389999999999999,
+        0.42600000000000005,
+        0.5755
+      ]
+    }
+  },
+  "probe_samples": [
+    {
+      "features": [
+        -1.2825,
+        -0.6174999999999999,
+        0.0
+      ],
+      "group_id": "inverse_square-world-0",
+      "label": 0,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-0-clean"
+    },
+    {
+      "features": [
+        1.0175,
+        0.8825000000000001,
+        0.0
+      ],
+      "group_id": "inverse_square-world-0",
+      "label": 1,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-0-mismatch"
+    },
+    {
+      "features": [
+        -1.2675,
+        -0.6325,
+        0.0
+      ],
+      "group_id": "inverse_square-world-1",
+      "label": 0,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-1-clean"
+    },
+    {
+      "features": [
+        1.0325000000000002,
+        0.8675,
+        0.0
+      ],
+      "group_id": "inverse_square-world-1",
+      "label": 1,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-1-mismatch"
+    },
+    {
+      "features": [
+        -1.2525,
+        -0.6475,
+        0.0
+      ],
+      "group_id": "inverse_square-world-2",
+      "label": 0,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-2-clean"
+    },
+    {
+      "features": [
+        1.0475,
+        0.8525,
+        0.0
+      ],
+      "group_id": "inverse_square-world-2",
+      "label": 1,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-2-mismatch"
+    },
+    {
+      "features": [
+        -1.2375,
+        -0.6625,
+        0.0
+      ],
+      "group_id": "inverse_square-world-3",
+      "label": 0,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-3-clean"
+    },
+    {
+      "features": [
+        1.0625,
+        0.8375,
+        0.0
+      ],
+      "group_id": "inverse_square-world-3",
+      "label": 1,
+      "law_family": "inverse_square",
+      "sample_id": "inverse_square-world-3-mismatch"
+    },
+    {
+      "features": [
+        -1.2225,
+        -0.6775,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-0",
+      "label": 0,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-0-clean"
+    },
+    {
+      "features": [
+        1.0775000000000001,
+        0.8225,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-0",
+      "label": 1,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-0-mismatch"
+    },
+    {
+      "features": [
+        -1.2075,
+        -0.6925,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-1",
+      "label": 0,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-1-clean"
+    },
+    {
+      "features": [
+        1.0925,
+        0.8075,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-1",
+      "label": 1,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-1-mismatch"
+    },
+    {
+      "features": [
+        -1.1925,
+        -0.7074999999999999,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-2",
+      "label": 0,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-2-clean"
+    },
+    {
+      "features": [
+        1.1075000000000002,
+        0.7925000000000001,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-2",
+      "label": 1,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-2-mismatch"
+    },
+    {
+      "features": [
+        -1.1775,
+        -0.7224999999999999,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-3",
+      "label": 0,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-3-clean"
+    },
+    {
+      "features": [
+        1.1225,
+        0.7775000000000001,
+        0.1
+      ],
+      "group_id": "inverse_cube-world-3",
+      "label": 1,
+      "law_family": "inverse_cube",
+      "sample_id": "inverse_cube-world-3-mismatch"
+    },
+    {
+      "features": [
+        -1.1624999999999999,
+        -0.7374999999999999,
+        0.2
+      ],
+      "group_id": "spring-world-0",
+      "label": 0,
+      "law_family": "spring",
+      "sample_id": "spring-world-0-clean"
+    },
+    {
+      "features": [
+        1.1375000000000002,
+        0.7625000000000001,
+        0.2
+      ],
+      "group_id": "spring-world-0",
+      "label": 1,
+      "law_family": "spring",
+      "sample_id": "spring-world-0-mismatch"
+    },
+    {
+      "features": [
+        -1.1475,
+        -0.7525,
+        0.2
+      ],
+      "group_id": "spring-world-1",
+      "label": 0,
+      "law_family": "spring",
+      "sample_id": "spring-world-1-clean"
+    },
+    {
+      "features": [
+        1.1525,
+        0.7475,
+        0.2
+      ],
+      "group_id": "spring-world-1",
+      "label": 1,
+      "law_family": "spring",
+      "sample_id": "spring-world-1-mismatch"
+    },
+    {
+      "features": [
+        -1.1324999999999998,
+        -0.7675,
+        0.2
+      ],
+      "group_id": "spring-world-2",
+      "label": 0,
+      "law_family": "spring",
+      "sample_id": "spring-world-2-clean"
+    },
+    {
+      "features": [
+        1.1675,
+        0.7325,
+        0.2
+      ],
+      "group_id": "spring-world-2",
+      "label": 1,
+      "law_family": "spring",
+      "sample_id": "spring-world-2-mismatch"
+    },
+    {
+      "features": [
+        -1.1175,
+        -0.7825,
+        0.2
+      ],
+      "group_id": "spring-world-3",
+      "label": 0,
+      "law_family": "spring",
+      "sample_id": "spring-world-3-clean"
+    },
+    {
+      "features": [
+        1.1825,
+        0.7175,
+        0.2
+      ],
+      "group_id": "spring-world-3",
+      "label": 1,
+      "law_family": "spring",
+      "sample_id": "spring-world-3-mismatch"
+    }
+  ],
+  "world_pairs": [
+    {
+      "latent_a": [
+        -1.0,
+        -0.2
+      ],
+      "latent_b": [
+        1.0,
+        -0.2
+      ],
+      "nuisance_a": {
+        "camera": 0,
+        "mass": 1.0,
+        "positions_hash": "p0"
+      },
+      "nuisance_b": {
+        "camera": 0,
+        "mass": 1.0,
+        "positions_hash": "p0"
+      },
+      "pair_id": "pair-0",
+      "target_a": 0.0,
+      "target_b": 1.0,
+      "world_a_id": "world-0-a",
+      "world_b_id": "world-0-b"
+    },
+    {
+      "latent_a": [
+        -1.0,
+        -0.19
+      ],
+      "latent_b": [
+        1.0,
+        -0.19
+      ],
+      "nuisance_a": {
+        "camera": 1,
+        "mass": 1.0,
+        "positions_hash": "p1"
+      },
+      "nuisance_b": {
+        "camera": 1,
+        "mass": 1.0,
+        "positions_hash": "p1"
+      },
+      "pair_id": "pair-1",
+      "target_a": 0.0,
+      "target_b": 1.0,
+      "world_a_id": "world-1-a",
+      "world_b_id": "world-1-b"
+    },
+    {
+      "latent_a": [
+        -1.0,
+        -0.18000000000000002
+      ],
+      "latent_b": [
+        1.0,
+        -0.18000000000000002
+      ],
+      "nuisance_a": {
+        "camera": 2,
+        "mass": 1.0,
+        "positions_hash": "p2"
+      },
+      "nuisance_b": {
+        "camera": 2,
+        "mass": 1.0,
+        "positions_hash": "p2"
+      },
+      "pair_id": "pair-2",
+      "target_a": 0.0,
+      "target_b": 1.0,
+      "world_a_id": "world-2-a",
+      "world_b_id": "world-2-b"
+    }
+  ]
+}

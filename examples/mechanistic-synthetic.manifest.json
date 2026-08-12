@@ -1,0 +1,56 @@
+{
+  "schema_version": "jump.experiments/v1",
+  "experiment_id": "mechanistic-synthetic-smoke",
+  "description": "CPU-only deterministic end-to-end smoke test",
+  "preregistration": {
+    "layer_allowlist": ["model.layers.4", "model.layers.8"],
+    "timepoint_allowlist": ["T0", "T1", "T2", "T3", "T4"],
+    "primary_comparisons": ["target_vs_baseline", "target_vs_matched_norm", "target_vs_orthogonal", "target_vs_generic_error"]
+  },
+  "defaults": {
+    "resources": {"gpu": "cpu", "timeout_seconds": 60},
+    "retry": {"max_attempts": 1}
+  },
+  "phases": [
+    {
+      "id": "mechanistic-smoke",
+      "depends_on": [],
+      "gates": [],
+      "budget": {
+        "allowed_gpu_types": ["cpu"],
+        "max_concurrent_gpus": 0,
+        "max_runtime_seconds": 60,
+        "max_cost_usd": 0,
+        "gpu_hourly_cost_usd": {"cpu": 0}
+      },
+      "runs": [
+        {
+          "id": "synthetic-suite",
+          "smoke_test": true,
+          "task": {
+            "module": "jump_mechanistic.runner",
+            "parameters": {
+              "task": "mechanistic_suite.synthetic",
+              "seed": 17,
+              "allowed_exponents": [1, 2, 3],
+              "checkpoint_id": "checkpoint-primary",
+              "checkpoint_revision": "model-revision-primary-v1",
+              "checkpoint_tokenizer_revision": "tokenizer-revision-v1",
+              "checkpoint_training_lineage_id": "lineage-primary",
+              "checkpoint_sha256": "fa6338605480ecab830cc719b1c9987602adacd3a02f0b3bdab2d3d9dfc254bd",
+              "replication_id": "checkpoint-replication",
+              "replication_revision": "model-revision-replication-v2",
+              "replication_tokenizer_revision": "tokenizer-revision-v2",
+              "replication_training_lineage_id": "lineage-independent-replication",
+              "replication_sha256": "acebd9038ca2f28cfe03af5245d820bf42a1d86a463be85c41489a3805805fd6"
+            }
+          },
+          "selection": {
+            "layers": ["model.layers.4", "model.layers.8"],
+            "timepoints": ["T0", "T1", "T2", "T3", "T4"]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -2,7 +2,11 @@
 
 JUMP is a controlled model organism for mechanistically studying **theory revision** in multimodal language models: does injecting an executable counterfactual world representation cause a frozen model to reject an inadequate law and promote a hidden-variable explanation? The research core is wrapped in a conversational scientific thought-experiment product.
 
-This repository currently holds the planning and review documents. Code, benchmark data, and evaluation scripts will land here as the project executes.
+The repository also includes a CPU-first mechanistic experiment suite: strict
+activation capture, exact scoring, held-out/OOD probes, paired latent swaps,
+causal interventions and controls, mediation, and second-checkpoint replication
+hooks. It is callable through a versioned manifest/result contract for the Modal
+runner; see [the automation guide](docs/EXPERIMENT_AUTOMATION.md).
 
 ## Scope
 
@@ -18,24 +22,24 @@ Overall posture: **CONDITIONAL GO** — go for the vertical slice with honest la
 | Document | Description |
 |---|---|
 | [docs/JUMP_PRD.md](docs/JUMP_PRD.md) | Implementation-ready PRD for the benchmark/instrument and gated mechanism study, including exact metrics, causal controls, artifacts, budgets, and pass/pivot/kill rules |
-| [docs/schemas/jump-experiment-manifest.schema.json](docs/schemas/jump-experiment-manifest.schema.json) | Machine-executable JSON Schema for preregistered, sequential, resumable experiment manifests |
 | [docs/JUMP_REVISED_RESEARCH_PLAN.md](docs/JUMP_REVISED_RESEARCH_PLAN.md) | The authoritative revised plan: two-track split, MVP definitions, architecture, hypotheses H1–H5, condition matrix, budget, phase gates |
 | [docs/JUMP_RISK_REVIEW.md](docs/JUMP_RISK_REVIEW.md) | Red-team risk review (R1–R23, A1–A12): timeline, budget, security, compliance, and overclaim risks with adopted mitigations |
 | [docs/JUMP_VALIDATION_REVIEW.md](docs/JUMP_VALIDATION_REVIEW.md) | Independent validation review (flaws 1–5, sharper plan items 1–8): confound analysis, baseline gaps, scope and metric critiques |
-| [docs/EXPERIMENT_AUTOMATION.md](docs/EXPERIMENT_AUTOMATION.md) | Versioned manifest/result contract and safe sequential Modal runner workflow |
+| [docs/EXPERIMENT_AUTOMATION.md](docs/EXPERIMENT_AUTOMATION.md) | Versioned contract, mechanistic task interface, hardware escalation policy, and safe sequential runner workflow |
+| [schemas/experiment-manifest-v1.schema.json](schemas/experiment-manifest-v1.schema.json) | Authoritative experiment manifest schema |
+| [schemas/run-result-v1.schema.json](schemas/run-result-v1.schema.json) | Authoritative immutable run-result schema |
 
-## Experiment runner
+## Experiment runner and mechanistic suite
 
-The repository now includes a manifest-driven Modal automation package. It
-serializes GPU runs, enforces preregistered layer/timepoint and phase budget
-ceilings before launch, stops on failed gates, and records immutable configs,
-logs, results, artifacts, and checksums. The checked-in example is locked to a
-tiny smoke test; the full paid matrix cannot be submitted accidentally.
+The repository includes a safe sequential experiment runner plus CPU-first
+mechanistic primitives for allowlisted activation capture, exact scoring,
+held-out/OOD probes, matched latent swaps, causal interventions, mediation, and
+second-checkpoint replication. Paid matrices and H100 escalation are fail-closed.
 
 ```bash
 python -m pip install -e '.[test]'
 pytest
-jump-experiments dry-run examples/smoke-manifest.yaml --smoke
+jump-experiments dry-run examples/mechanistic-synthetic.manifest.json --smoke
 ```
 
 See [the automation guide](docs/EXPERIMENT_AUTOMATION.md) before any Modal use.

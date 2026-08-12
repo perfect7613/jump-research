@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jump-experiment-runner"
 version = "0.1.0"
-description = "Manifest-driven, sequential Modal experiment automation for JUMP"
+description = "Safe experiment automation and mechanistic analysis primitives for JUMP"
 requires-python = ">=3.10"
 dependencies = ["jsonschema>=4.23,<5", "PyYAML>=6.0,<7"]
 
@@ -15,13 +15,16 @@ test = ["modal>=1.1,<2", "pytest>=8,<9"]
 
 [project.scripts]
 jump-experiments = "jump_runner.cli:main"
+jump-mechanistic = "jump_mechanistic.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 jump_runner = ["schemas/*.json"]
+jump_mechanistic = ["fixtures/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q"
