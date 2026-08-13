@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jump_mechanistic.runner import execute_run, execute_task_file
+from jump_contracts import EvidenceError, load_task_evidence, promote_task_artifacts
+from jump_mechanistic.runner import (
+    MECHANISTIC_ARTIFACT_CONTRACT,
+    execute_run,
+    execute_task_file,
+    validate_mechanistic_task_evidence,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -43,17 +49,21 @@ class RunnerIntegrationTests(unittest.TestCase):
                 "swap.swap_effect",
                 "causal.ate",
                 "causal.target_vs_control.ate",
-                "mediation.indirect_effect",
-                "mediation.specificity_passed",
+                "observational_mediation.indirect_effect",
+                "gates.g1_passed",
+                "gates.g3_passed",
+                "gates.g5_passed",
                 "gates.g6_passed",
                 "gates.g7_passed",
                 "gates.g8_passed",
             }
             self.assertTrue(required <= names)
-            for gate in ("gates.g6_passed", "gates.g7_passed", "gates.g8_passed"):
+            # The fixture exercises contracts only: it is below the confirmatory
+            # cluster floor and must never emit a positive mechanistic gate.
+            for gate in ("gates.g1_passed", "gates.g3_passed", "gates.g5_passed", "gates.g6_passed", "gates.g7_passed", "gates.g8_passed"):
                 self.assertEqual(
                     [metric["value"] for metric in result_a["metrics"] if metric["name"] == gate],
-                    [1.0],
+                    [0.0],
                 )
             bootstrap_metrics = [
                 metric for metric in result_a["metrics"] if metric["name"].endswith("bootstrap_resamples")
@@ -76,6 +86,10 @@ class RunnerIntegrationTests(unittest.TestCase):
             for artifact in result_a["artifacts"]:
                 contents = (Path(first) / artifact["path"]).read_bytes()
                 self.assertEqual(hashlib.sha256(contents).hexdigest(), artifact["sha256"])
+            gate_diagnostics = json.loads((Path(first) / "artifacts" / "computed_gates.json").read_text())
+            self.assertFalse(gate_diagnostics["claim_eligible"])
+            self.assertEqual(gate_diagnostics["evidence_namespace"], "synthetic_fixture_nonclaim")
+            self.assertTrue(gate_diagnostics["raw_records"]["g1_regime"])
             self.assertEqual(json.loads((Path(first) / "result.json").read_text()), result_a)
 
     def test_run_cannot_expand_preregistered_allowlists(self):
@@ -89,6 +103,17 @@ class RunnerIntegrationTests(unittest.TestCase):
         parameters["replication_revision"] = parameters["checkpoint_revision"]
         with tempfile.TemporaryDirectory() as output:
             with self.assertRaisesRegex(ValueError, "replication checkpoint identity"):
+                execute_run(
+                    self.manifest,
+                    phase_id="mechanistic-smoke",
+                    run_id="synthetic-suite",
+                    output_dir=output,
+                )
+
+    def test_trusted_gate_boolean_parameters_are_rejected(self):
+        self.manifest["phases"][0]["runs"][0]["task"]["parameters"]["g3_passed"] = True
+        with tempfile.TemporaryDirectory() as output:
+            with self.assertRaisesRegex(ValueError, "trusted gate booleans are forbidden"):
                 execute_run(
                     self.manifest,
                     phase_id="mechanistic-smoke",
@@ -118,14 +143,65 @@ class RunnerIntegrationTests(unittest.TestCase):
                 checkpoint_dir=checkpoint,
             )
             self.assertEqual(result["schema_version"], "jump.task-evidence/v1")
+            self.assertEqual(result["evidence_namespace"], "synthetic_fixture_nonclaim")
+            self.assertFalse(result["claim_eligible"])
             self.assertIn("metrics", result)
             self.assertNotIn("status", result)
-            self.assertEqual(
-                {artifact["media_type"] for artifact in result["artifacts"]},
-                {"application/json", "application/x-ndjson"},
-            )
             self.assertEqual(json.loads((output / "result.json").read_text()), result)
             self.assertTrue((output / "artifacts" / "activations.jsonl").is_file())
+            self.assertEqual(
+                {
+                    record["name"]: (record["role"], record["media_type"])
+                    for record in result["artifacts"]
+                },
+                MECHANISTIC_ARTIFACT_CONTRACT,
+            )
+            self.assertTrue(
+                all(
+                    record["evidence_namespace"] == "synthetic_fixture_nonclaim"
+                    and record["claim_eligible"] is False
+                    for record in result["artifacts"]
+                )
+            )
+            promoted_dir = attempt / "promoted"
+            promoted = promote_task_artifacts(
+                output, promoted_dir, "attempts/0001/artifacts", result
+            )
+            self.assertEqual(
+                {
+                    record["name"]: (
+                        record["role"], record["media_type"], record["sha256"]
+                    )
+                    for record in promoted
+                },
+                {
+                    record["name"]: (
+                        record["role"], record["media_type"], record["sha256"]
+                    )
+                    for record in result["artifacts"]
+                },
+            )
+            with self.assertRaisesRegex(EvidenceError, "destination already exists"):
+                promote_task_artifacts(
+                    output, promoted_dir, "attempts/0001/artifacts", result
+                )
+            (output / "artifacts" / "computed_gates.json").write_text("tampered")
+            with self.assertRaisesRegex(EvidenceError, "artifact hash mismatch"):
+                load_task_evidence(output / "result.json")
+
+    def test_mechanistic_publication_rejects_legacy_discovered_artifacts(self):
+        with self.assertRaisesRegex(EvidenceError, "jump.task-evidence/v1"):
+            validate_mechanistic_task_evidence({"metrics": []})
+        with self.assertRaisesRegex(EvidenceError, "stable artifact set"):
+            validate_mechanistic_task_evidence(
+                {
+                    "schema_version": "jump.task-evidence/v1",
+                    "metrics": [],
+                    "artifacts": [],
+                    "evidence_namespace": "synthetic_fixture_nonclaim",
+                    "claim_eligible": False,
+                }
+            )
 
 
 if __name__ == "__main__":

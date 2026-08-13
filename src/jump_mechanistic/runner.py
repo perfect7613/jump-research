@@ -14,10 +14,11 @@ import math
 import os
 import platform
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from jump_contracts.evidence import artifact_declaration, write_task_evidence
+from jump_contracts import TASK_EVIDENCE_VERSION, EvidenceError, artifact_declaration, write_task_evidence
 
 from .capture import ActivationCapture, CapturePolicy
 from .interventions import (
@@ -27,16 +28,25 @@ from .interventions import (
     evaluate_latent_swap,
     inject,
 )
+from .gates import (
+    BehaviorConditionRecord,
+    InterventionOutcomeRecord,
+    MediationArmRecord,
+    PromotionAblationRecord,
+    RegimeRecord,
+    SwapOutcomeRecord,
+    evaluate_g1,
+    evaluate_g3,
+    evaluate_g5,
+    evaluate_g6,
+)
 from .metrics import (
-    ConfirmatoryEvidence,
     contrast_effects,
-    evaluate_confirmatory_gates,
-    mediation_analysis,
-    mediation_specificity,
+    observational_mediation_analysis,
     paired_effect,
 )
 from .probes import ProbeSample, heldout_probe_evaluation, ood_law_family_evaluation
-from .scoring import score_dataset
+from .scoring import score_dataset, score_episode
 from .synthetic import load_fixture
 from .vectors import dot, norm
 
@@ -44,6 +54,13 @@ from .vectors import dot, norm
 MANIFEST_SCHEMA_VERSION = "jump.experiments/v1"
 RESULT_SCHEMA_VERSION = "jump.run-result/v1"
 SUPPORTED_TASKS = {"jump_mechanistic.runner", "mechanistic_suite.synthetic"}
+MECHANISTIC_ARTIFACT_CONTRACT = {
+    "activations": ("activation-evidence", "application/x-ndjson"),
+    "interventions": ("intervention-control-evidence", "application/json"),
+    "mediation": ("observational-mediation-evidence", "application/json"),
+    "computed_gates": ("mechanistic-gate-evidence", "application/json"),
+    "suite_summary": ("mechanistic-suite-summary", "application/json"),
+}
 
 
 def execute_run(
@@ -100,6 +117,12 @@ def execute_run(
 def synthetic_suite_task(
     parameters: dict[str, Any], *, policy: CapturePolicy, output_dir: Path
 ) -> dict[str, Any]:
+    forbidden_gate_flags = sorted(set(parameters) & {"g1_passed", "g3_passed", "g5_passed", "g6_passed"})
+    if forbidden_gate_flags:
+        raise ValueError(
+            "trusted gate booleans are forbidden; provide raw content-addressed evidence records: "
+            + ", ".join(forbidden_gate_flags)
+        )
     fixture = load_fixture(parameters.get("fixture_path"))
     seed = int(parameters.get("seed", 17))
     checkpoint_id = str(parameters.get("checkpoint_id", "synthetic-primary"))
@@ -144,6 +167,19 @@ def synthetic_suite_task(
     behavior_scores = score_dataset(fixture["behavior"], allowed_exponents=allowed_exponents)
     for name, value in behavior_scores.items():
         _metric(metrics, f"behavior.{name}", value, split="test", checkpoint_id=checkpoint_id)
+    regime_records = [
+        RegimeRecord(
+            episode_id=f"fixture-behavior-{index}",
+            parsed=isinstance(row.get("prediction"), dict),
+            joint_correct=(
+                score_episode(row["prediction"], row["target"])["joint_theory_accuracy"]
+                == 1.0
+            ),
+        )
+        for index, row in enumerate(fixture["behavior"])
+    ]
+    g1 = evaluate_g1(regime_records)
+    _metric(metrics, "gates.g1_passed", 0.0, split="fixture_nonclaim", checkpoint_id=checkpoint_id)
 
     samples = [ProbeSample(**sample) for sample in fixture["probe_samples"]]
     heldout = heldout_probe_evaluation(samples, seed=seed)
@@ -232,17 +268,18 @@ def synthetic_suite_task(
                 checkpoint_id=checkpoint_id,
             )
 
+    # The legacy fixture's mediator arrays remain available only as explicitly
+    # observational descriptions. They are never supplied to G6.
     mediation_details: dict[str, Any] = {}
-    checkpoint_mediation: dict[str, dict[str, Any]] = {}
     for check_id, values in fixture["mediation"].items():
-        primary = mediation_analysis(
+        primary = observational_mediation_analysis(
             values["treatment"],
             values["mediator"],
             values["outcome"],
             cluster_ids=values["cluster_ids"],
             seed=seed,
         )
-        promotion = mediation_analysis(
+        promotion = observational_mediation_analysis(
             values["treatment"],
             values["promotion_mediator"],
             values["outcome"],
@@ -250,7 +287,7 @@ def synthetic_suite_task(
             seed=seed,
         )
         mediator_controls = {
-            name: mediation_analysis(
+            name: observational_mediation_analysis(
                 values["treatment"],
                 mediator,
                 values["outcome"],
@@ -259,34 +296,21 @@ def synthetic_suite_task(
             )
             for name, mediator in values["specificity_controls"].items()
         }
-        specificity = mediation_specificity(primary, mediator_controls)
         mediation_details[check_id] = {
             "ordered": {"inadequacy": primary, "promotion": promotion},
             "controls": mediator_controls,
-            "specificity": specificity,
-        }
-        checkpoint_mediation[check_id] = {
-            "primary": primary,
-            "promotion": promotion,
-            "specificity": specificity,
+            "claim_eligibility": "exploratory_descriptive_only_not_g6",
         }
         for name in (
             "indirect_effect", "indirect_ci_low", "indirect_ci_high", "direct_effect",
             "direct_ci_low", "direct_ci_high", "total_effect", "total_ci_low", "total_ci_high",
             "mediation_proportion", "cluster_count", "bootstrap_resamples", "bootstrap_seed",
         ):
-            _metric(metrics, f"mediation.{name}", primary[name], split="paired", checkpoint_id=check_id)
+            _metric(metrics, f"observational_mediation.{name}", primary[name], split="paired", checkpoint_id=check_id)
         _metric(
             metrics,
-            "mediation.promotion_indirect_ci_low",
+            "observational_mediation.promotion_indirect_ci_low",
             promotion["indirect_ci_low"],
-            split="paired",
-            checkpoint_id=check_id,
-        )
-        _metric(
-            metrics,
-            "mediation.specificity_passed",
-            float(specificity["passed"]),
             split="paired",
             checkpoint_id=check_id,
         )
@@ -308,9 +332,16 @@ def synthetic_suite_task(
         )
         for check_id, values in fixture["ood_checkpoint_effects"].items()
     }
-    confirmatory: dict[str, ConfirmatoryEvidence] = {}
-    for check_id in sorted(checkpoint_mediation):
-        mediation = checkpoint_mediation[check_id]
+    raw_gate_artifacts: dict[str, Any] = {
+        "schema_version": "jump.mechanistic-gate-diagnostics/v1",
+        "evidence_namespace": "synthetic_fixture_nonclaim",
+        "claim_eligible": False,
+        "warning": "fixture outputs test contracts only and cannot set scientific gates",
+        "g1": g1.to_dict(),
+        "raw_records": {"g1_regime": [asdict(row) for row in regime_records]},
+        "checkpoints": {},
+    }
+    for check_id in sorted(fixture["checkpoint_identities"]):
         causal = causal_replicates[check_id]
         ood_causal = ood_replicates[check_id]
         retention = (
@@ -318,30 +349,50 @@ def synthetic_suite_task(
             if causal["ate"] is not None and causal["ate"] > 0
             else 0.0
         )
-        gate_input = fixture["checkpoint_gate_inputs"][check_id]
-        confirmatory[check_id] = ConfirmatoryEvidence.from_dict(
-            {
-                "identity": fixture["checkpoint_identities"][check_id],
-                "g3_passed": gate_input["g3_passed"],
-                "g5_passed": gate_input["g5_passed"] and causal["ci_low"] > 0,
-                "total_ci_low": mediation["primary"]["total_ci_low"],
-                "ordered_nie_ci_lows": [
-                    mediation["primary"]["indirect_ci_low"],
-                    mediation["promotion"]["indirect_ci_low"],
-                ],
-                "mediated_proportion": mediation["primary"]["mediation_proportion"],
-                "specificity_passed": mediation["specificity"]["passed"],
-                "ood_effect_ci_low": ood_causal["ci_low"],
-                "ood_retention": retention,
-                "provenance_hash_match_rate": gate_input["provenance_hash_match_rate"],
-            }
-        )
+        g3_records, swap_gate_records = _fixture_g3_records(check_id, fixture)
+        g5_records = _fixture_g5_records(check_id, fixture)
+        g6_records, ablation_records = _fixture_g6_records(check_id, fixture)
+        g3 = evaluate_g3(g3_records, swap_gate_records, seed=seed)
+        g5 = evaluate_g5(g5_records, seed=seed)
+        g6 = evaluate_g6(g6_records, ablation_records, seed=seed)
+        provenance_rate = sum(
+            len(
+                {
+                    r.world_latent_sha256,
+                    r.decoder_input_sha256,
+                    r.injection_input_sha256,
+                    r.answer_world_latent_sha256,
+                    r.delivered_world_latent_sha256,
+                }
+            )
+            == 1
+            for r in swap_gate_records
+        ) / len(swap_gate_records)
+        raw_gate_artifacts["checkpoints"][check_id] = {
+            "raw_records": {
+                "g3_conditions": [asdict(row) for row in g3_records],
+                "g3_swaps": [asdict(row) for row in swap_gate_records],
+                "g5_interventions": [asdict(row) for row in g5_records],
+                "g6_clamp_patch_arms": [asdict(row) for row in g6_records],
+                "g6_promotion_ablation": [asdict(row) for row in ablation_records],
+            },
+            "g3": g3.to_dict(), "g5": g5.to_dict(), "g6": g6.to_dict(),
+            "ood_diagnostic": {
+                "effect_ci_low": ood_causal["ci_low"],
+                "retention": retention,
+                "provenance_hash_match_rate": provenance_rate,
+            },
+        }
     primary_key = checkpoint_id
     replication_key = replication_id
-    gates = evaluate_confirmatory_gates(
-        confirmatory.get(primary_key), confirmatory.get(replication_key)
-    )
-    for gate_name in ("g6", "g7", "g8"):
+    gates = {
+        gate: {
+            "passed": False,
+            "reasons": ["synthetic fixture evidence is not claim-eligible"],
+        }
+        for gate in ("g3", "g5", "g6", "g7", "g8")
+    }
+    for gate_name in ("g3", "g5", "g6", "g7", "g8"):
         _metric(
             metrics,
             f"gates.{gate_name}_passed",
@@ -350,6 +401,7 @@ def synthetic_suite_task(
             condition=replication_id if gate_name == "g8" else None,
             checkpoint_id="all" if gate_name == "g8" else primary_key,
         )
+    raw_gate_artifacts["confirmatory"] = gates
     _write_json(
         output_dir / "artifacts" / "mediation.json",
         {
@@ -357,8 +409,10 @@ def synthetic_suite_task(
             "causal_effects": causal_replicates,
             "ood_causal_effects": ood_replicates,
             "gates": gates,
+            "warning": "fixture outputs are contract tests, not mechanistic evidence",
         },
     )
+    _write_json(output_dir / "artifacts" / "computed_gates.json", raw_gate_artifacts)
 
     summary_path = output_dir / "artifacts" / "suite_summary.json"
     _write_json(
@@ -373,9 +427,159 @@ def synthetic_suite_task(
         activation_path,
         output_dir / "artifacts" / "interventions.json",
         output_dir / "artifacts" / "mediation.json",
+        output_dir / "artifacts" / "computed_gates.json",
         summary_path,
     ]
     return {"metrics": metrics, "artifacts": [_artifact(path, output_dir) for path in paths]}
+
+
+def _fixture_g3_records(
+    checkpoint_id: str, fixture: dict[str, Any]
+) -> tuple[list[BehaviorConditionRecord], list[SwapOutcomeRecord]]:
+    """Materialize raw CPU-fixture records; never a claim-bearing shortcut."""
+    source = fixture["intervention_outcomes"]
+    condition_source = {
+        "E": "target",
+        "G": "matched_norm",
+        "W": "baseline",
+        "I": "orthogonal",
+        "C_prime": "generic_error",
+        "T1c": "generic_error",
+        "T2c": "baseline",
+    }
+    condition_records: list[BehaviorConditionRecord] = []
+    for index in range(len(source["target"])):
+        for condition, key in condition_source.items():
+            condition_records.append(
+                BehaviorConditionRecord(
+                    checkpoint_id=checkpoint_id,
+                    episode_id=f"{checkpoint_id}-g3-{index}",
+                    cluster_id=fixture["intervention_cluster_ids"][index],
+                    condition=condition,
+                    joint_correct=float(source[key][index]) >= 0.5,
+                    prompt_token_count=64,
+                    decoding_sha256=_sha256_bytes(f"fixture-decoding:{checkpoint_id}".encode()),
+                )
+            )
+    swaps: list[SwapOutcomeRecord] = []
+    for pair in fixture["world_pairs"]:
+        latent_hash = _sha256_bytes(_canonical_json(pair["latent_b"]))
+        for direction in ("a_to_b", "b_to_a"):
+            swaps.append(
+                SwapOutcomeRecord.fixture_nonclaim(
+                    checkpoint_id=checkpoint_id,
+                    pair_id=pair["pair_id"],
+                    cluster_id=f"{checkpoint_id}-{pair['pair_id']}",
+                    direction=direction,
+                    moved_toward_donor=True,
+                    recipient_prompt_token_count=64,
+                    donor_prompt_token_count=64,
+                    latent_sha256=latent_hash,
+                    answer_sha256=_sha256_bytes(
+                        _canonical_json(
+                            {"fixture_answer": pair["pair_id"], "direction": direction}
+                        )
+                    ),
+                    donor_world_id=(
+                        pair["world_a_id"] if direction == "a_to_b" else pair["world_b_id"]
+                    ),
+                    recipient_world_id=(
+                        pair["world_b_id"] if direction == "a_to_b" else pair["world_a_id"]
+                    ),
+                )
+            )
+    return condition_records, swaps
+
+
+def _fixture_g5_records(
+    checkpoint_id: str, fixture: dict[str, Any]
+) -> list[InterventionOutcomeRecord]:
+    source = fixture["intervention_outcomes"]
+    control_source = {
+        "target": "target",
+        "baseline": "baseline",
+        "matched_norm": "matched_norm",
+        "orthogonal": "orthogonal",
+        "generic_error": "generic_error",
+        "sham": "baseline",
+        "prompt_length": "baseline",
+    }
+    records: list[InterventionOutcomeRecord] = []
+    for kind in ("ablation", "injection"):
+        for index in range(len(source["target"])):
+            for condition, key in control_source.items():
+                records.append(
+                    InterventionOutcomeRecord(
+                        checkpoint_id=checkpoint_id,
+                        episode_id=f"{checkpoint_id}-g5-{index}",
+                        cluster_id=fixture["intervention_cluster_ids"][index],
+                        intervention_kind=kind,
+                        condition=condition,
+                        outcome=float(source[key][index]) >= 0.5,
+                        parse_failed=False,
+                        site_id="fixture.site/T3",
+                        intervention_sha256=_sha256_bytes(
+                            f"fixture:{checkpoint_id}:{kind}:{condition}:{index}".encode()
+                        ),
+                    )
+                )
+    return records
+
+
+def _fixture_g6_records(
+    checkpoint_id: str, fixture: dict[str, Any]
+) -> tuple[list[MediationArmRecord], list[PromotionAblationRecord]]:
+    effects = fixture["checkpoint_effects"][checkpoint_id]
+    records: list[MediationArmRecord] = []
+    ablations: list[PromotionAblationRecord] = []
+    for index, (treated, control, cluster) in enumerate(
+        zip(effects["treated"], effects["control"], effects["cluster_ids"])
+    ):
+        episode_id = f"{checkpoint_id}-g6-{index}"
+        for stage in ("inadequacy", "promotion"):
+            for mediator in ("primary", "matched_norm", "orthogonal", "generic_error", "sham", "prompt_length"):
+                clamp = control + 0.2 * (treated - control) if mediator == "primary" else treated
+                for arm, outcome in (
+                    ("control_natural", control),
+                    ("treated_natural", treated),
+                    ("treated_control_clamp", clamp),
+                ):
+                    is_clamp = arm == "treated_control_clamp"
+                    records.append(
+                        MediationArmRecord(
+                            checkpoint_id=checkpoint_id,
+                            episode_id=episode_id,
+                            cluster_id=cluster,
+                            stage=stage,
+                            mediator=mediator,
+                            arm=arm,
+                            outcome=float(outcome),
+                            site_id=f"fixture.site/{stage}",
+                            intervention_kind=("activation_clamp" if is_clamp else None),
+                            intervention_id=(f"fixture-clamp:{stage}:{mediator}:{index}" if is_clamp else None),
+                            source_activation_sha256=(
+                                _sha256_bytes(f"fixture-activation:{stage}:{mediator}:{index}".encode())
+                                if is_clamp else None
+                            ),
+                            result_sha256=_sha256_bytes(
+                                f"fixture-result:{checkpoint_id}:{stage}:{mediator}:{arm}:{index}".encode()
+                            ),
+                        )
+                    )
+        ablations.append(
+            PromotionAblationRecord(
+                checkpoint_id=checkpoint_id,
+                episode_id=episode_id,
+                cluster_id=cluster,
+                natural_promotion=float(treated),
+                inadequacy_ablated_promotion=float(control),
+                intervention_id=f"fixture-inadequacy-ablation:{index}",
+                result_sha256=_sha256_bytes(
+                    f"fixture-ablation-result:{checkpoint_id}:{index}".encode()
+                ),
+            )
+        )
+    return records, ablations
 
 
 def run_manifest_file(
@@ -430,11 +634,40 @@ def execute_task_file(
     if checkpoint_dir:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     payload = synthetic_suite_task(parameters, policy=policy, output_dir=target)
-    return write_task_evidence(
+    result = write_task_evidence(
         target,
         metrics=payload["metrics"],
         artifacts=payload["artifacts"],
+        evidence_namespace="synthetic_fixture_nonclaim",
+        claim_eligible=False,
     )
+    validate_mechanistic_task_evidence(result)
+    return result
+
+
+def validate_mechanistic_task_evidence(result: dict[str, Any]) -> None:
+    """Reject the shared contract's lossy legacy fallback for this producer."""
+    if result.get("schema_version") != TASK_EVIDENCE_VERSION:
+        raise EvidenceError("mechanistic publication requires jump.task-evidence/v1")
+    if result.get("evidence_namespace") != "synthetic_fixture_nonclaim":
+        raise EvidenceError("mechanistic fixture evidence namespace is missing or incorrect")
+    if result.get("claim_eligible") is not False:
+        raise EvidenceError("mechanistic fixture evidence must be explicitly non-claim")
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise EvidenceError("mechanistic task evidence requires declared artifacts")
+    by_name = {record.get("name"): record for record in artifacts if isinstance(record, dict)}
+    if set(by_name) != set(MECHANISTIC_ARTIFACT_CONTRACT) or len(artifacts) != len(by_name):
+        raise EvidenceError("mechanistic task evidence must declare the exact stable artifact set")
+    for name, (role, media_type) in MECHANISTIC_ARTIFACT_CONTRACT.items():
+        record = by_name[name]
+        if (
+            record.get("role") != role
+            or record.get("media_type") != media_type
+            or record.get("evidence_namespace") != "synthetic_fixture_nonclaim"
+            or record.get("claim_eligible") is not False
+        ):
+            raise EvidenceError(f"mechanistic artifact metadata drifted for {name}")
 
 
 def validate_manifest_header(manifest: dict[str, Any]) -> None:
@@ -484,11 +717,17 @@ def _metric(
 
 
 def _artifact(path: Path, output_dir: Path) -> dict[str, Any]:
+    if path.stem not in MECHANISTIC_ARTIFACT_CONTRACT:
+        raise ValueError(f"mechanistic artifact has no stable evidence role: {path.name}")
+    role, media_type = MECHANISTIC_ARTIFACT_CONTRACT[path.stem]
     return artifact_declaration(
         path,
         output_dir,
         name=path.stem,
-        media_type="application/x-ndjson" if path.suffix == ".jsonl" else "application/json",
+        media_type=media_type,
+        role=role,
+        evidence_namespace="synthetic_fixture_nonclaim",
+        claim_eligible=False,
     )
 
 
