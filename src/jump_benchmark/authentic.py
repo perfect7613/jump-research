@@ -357,11 +357,19 @@ def module_content_sha256(module: Any) -> str:
     digest = hashlib.sha256()
     for name, parameter in sorted(module.state_dict().items()):
         value = parameter.detach().to(device="cpu").contiguous()
+        # NumPy has no bfloat16 dtype. Preserve those parameter bytes exactly
+        # rather than converting the deployed projector/gate to float32.
+        if value.dtype == __import__("torch").bfloat16:
+            raw_value = value.view(__import__("torch").uint16)
+            dtype_name = "torch.bfloat16"
+        else:
+            raw_value = value
+            dtype_name = str(value.numpy().dtype)
         header = json.dumps(
-            {"name": name, "dtype": str(value.numpy().dtype), "shape": list(value.shape)},
+            {"name": name, "dtype": dtype_name, "shape": list(value.shape)},
             sort_keys=True, separators=(",", ":"),
         ).encode()
-        digest.update(header + b"\0" + value.numpy().tobytes(order="C"))
+        digest.update(header + b"\0" + raw_value.numpy().tobytes(order="C"))
     return digest.hexdigest()
 
 
