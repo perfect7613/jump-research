@@ -42,6 +42,7 @@ def manifest() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "experiment_id": "track-h-token-conditioned-latent-memory-bridge-pilot-v1",
         "hypothesis": "multiple object-specific latent memories injected at selected layers improve frozen Gemma use relative to one global additive vector",
+        "execution_lineage": {"state":"recovery","recovery_of":{"prior_manifest_sha256":"3e0c5fce2a65f3d1b401af45e1930c364c570da0a9699e1eb984b98dd62d7559","failed_call_ids":["fc-01KZYA61H6YRC2AZ0JB20HVP1Q"],"failure_reason":"bridge input z remained float32 while bridge weights were bfloat16","source_outputs_reused":False,"source_root_mutated":False}},
         "claim_label": "fresh latent-memory bridge engineering pilot; no causal or mechanistic claim",
         "world_model": {
             "source_manifest_sha256": WORLD_MANIFEST_SHA256,
@@ -106,7 +107,8 @@ def build_bridge(hidden_size: int):
             return torch.cat([self.object_memory(objects), self.global_memory(z[:, 30:32])[:, None]], dim=1)
 
         def inject(self, layer: int, hidden, z):
-            memory = self.memory(z).to(dtype=hidden.dtype)
+            bridge_dtype = next(self.parameters()).dtype
+            memory = self.memory(z.to(dtype=bridge_dtype)).to(dtype=hidden.dtype)
             q = self.q[str(layer)](hidden)
             k = self.k[str(layer)](memory)
             v = self.v[str(layer)](memory)
@@ -192,7 +194,7 @@ def _target(seed:int):
 
 def cpu_preflight(hidden_size:int=64):
     import torch
-    bridge=build_bridge(hidden_size);z=torch.randn(2,LATENT_DIM);memory=bridge.memory(z);hidden=torch.randn(2,5,hidden_size);changed=bridge.inject(LAYERS[0],hidden,z)
+    bridge=build_bridge(hidden_size).to(dtype=torch.bfloat16);z=torch.randn(2,LATENT_DIM);memory=bridge.memory(z.to(torch.bfloat16));hidden=torch.randn(2,5,hidden_size,dtype=torch.bfloat16);changed=bridge.inject(LAYERS[0],hidden,z)
     return {"latent_shape":list(z.shape),"memory_shape":list(memory.shape),"output_shape":list(changed.shape),"trainable_parameters":sum(p.numel() for p in bridge.parameters()),"prompt_tokens_unchanged_by_api":True,"z_text_serialization":False}
 
 
