@@ -827,6 +827,37 @@ def authentic_world_object_jepa_pilot(expected_manifest_sha256: str,expected_cod
         if result.get("status")!="completed":raise RunnerError(f"object JEPA failed: {result.get('error')}")
         return result
 
+
+def _authorize_object_jepa_residual(*,expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool,confirm_h100:bool)->dict[str,Any]:
+    from jump_benchmark.object_jepa_residual import MANIFEST_SHA256,manifest
+    if confirm_paid is not True or confirm_h100 is not True:raise RunnerError("residual JEPA requires literal paid and H100 confirmations")
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("residual JEPA immutable identity mismatch")
+    e=manifest()["execution"];forecast=e["timeout_seconds"]/3600*e["h100_rate_usd_per_hour"]
+    if e["resource"]!="H100" or e["gpu_count"]!=1 or e["max_containers"]!=1 or e["max_inputs"]!=1 or e["max_attempts"]!=1 or abs(forecast-e["forecast_usd"])>1e-9 or forecast>e["aggregate_authority_ceiling_usd"]:raise RunnerError("residual JEPA resource/cost mismatch")
+    return e
+
+@app.function(image=track_h_image,timeout=300,max_containers=1,name="authentic_world_object_jepa_residual_preflight")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_residual_preflight(expected_manifest_sha256:str,expected_code_sha:str)->dict[str,Any]:
+    import torch
+    from jump_benchmark.object_jepa_residual import MANIFEST_SHA256,build_predictor
+    from jump_benchmark.object_jepa import LATENT_DIM
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("residual JEPA preflight identity mismatch")
+    p=build_predictor();z=torch.randn(2,LATENT_DIM);a=torch.randn(2,6,2);out=p(z,a,torch.tensor([0,3]));zero=p(z,torch.zeros_like(a),torch.tensor([0,3]));
+    if tuple(out.shape)!=(2,LATENT_DIM) or torch.equal(out,zero):raise RunnerError("residual JEPA action/shape seam failed")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"shape":list(out.shape),"action_changes_transition":True,"gpu_allocated":False,"persistent_root_created":False}
+
+@app.function(image=track_h_image,gpu="H100",timeout=3600,max_containers=1,volumes={str(VOLUME_PATH):volume},name="authentic_world_object_jepa_residual_pilot")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_residual_pilot(expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool=False,confirm_h100:bool=False)->dict[str,Any]:
+    from jump_benchmark.object_jepa_residual import run_contract
+    _authorize_object_jepa_residual(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-object-jepa-residual"/expected_manifest_sha256/"run";phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed":raise RunnerError(f"residual JEPA failed: {result.get('error')}")
+        return result
+
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
     mode: str,

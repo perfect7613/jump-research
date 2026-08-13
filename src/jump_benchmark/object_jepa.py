@@ -98,8 +98,10 @@ def _world(seed: int, split: str) -> dict[str, Any]:
     for obj in range(6):
         acted_velocities[obj][0] += action[obj][0]; acted_velocities[obj][1] += action[obj][1]
     continuation = _trajectory([list(p) for p in last["positions"]], acted_velocities, partition, law, SimulatorConfig(steps=max(HORIZONS)+1))
+    null_continuation = _trajectory([list(p) for p in last["positions"]], [list(v) for v in last["velocities"]], partition, law, SimulatorConfig(steps=max(HORIZONS)+1))
     observed = [[[float(v) for v in (*frame["positions"][o], *frame["velocities"][o])] for o in range(6)] for frame in history]
     target_positions = [continuation[h]["positions"] for h in HORIZONS]
+    null_target_positions = [null_continuation[h]["positions"] for h in HORIZONS]
     target_windows = []
     combined = history + continuation[1:]
     for h in HORIZONS:
@@ -107,7 +109,13 @@ def _world(seed: int, split: str) -> dict[str, Any]:
         window = combined[max(0, end-FRAMES+1):end+1]
         if len(window) < FRAMES: window = [window[0]] * (FRAMES-len(window)) + window
         target_windows.append([[[float(v) for v in (*frame["positions"][o], *frame["velocities"][o])] for o in range(6)] for frame in window])
-    return {"observed":observed,"mask":[[1.0]*6 for _ in range(FRAMES)],"action":action,"target_positions":target_positions,"target_windows":target_windows}
+    null_target_windows=[]
+    null_combined=history+null_continuation[1:]
+    for h in HORIZONS:
+        end=FRAMES-1+h;window=null_combined[max(0,end-FRAMES+1):end+1]
+        if len(window)<FRAMES:window=[window[0]]*(FRAMES-len(window))+window
+        null_target_windows.append([[[float(v) for v in (*frame["positions"][o],*frame["velocities"][o])] for o in range(6)] for frame in window])
+    return {"observed":observed,"mask":[[1.0]*6 for _ in range(FRAMES)],"action":action,"target_positions":target_positions,"target_windows":target_windows,"null_target_positions":null_target_positions,"null_target_windows":null_target_windows}
 
 
 def dataset(split: str, count: int) -> dict[str, Any]:
@@ -188,6 +196,8 @@ def _tensorize(records: list[dict[str,Any]], device: str):
         "action":torch.tensor([r["action"] for r in records],dtype=torch.float32,device=device),
         "target_positions":torch.tensor([r["target_positions"] for r in records],dtype=torch.float32,device=device),
         "target_windows":torch.tensor([r["target_windows"] for r in records],dtype=torch.float32,device=device),
+        "null_target_positions":torch.tensor([r["null_target_positions"] for r in records],dtype=torch.float32,device=device),
+        "null_target_windows":torch.tensor([r["null_target_windows"] for r in records],dtype=torch.float32,device=device),
     }
 
 
