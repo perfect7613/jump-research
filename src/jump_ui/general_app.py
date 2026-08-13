@@ -30,6 +30,16 @@ def create_general_app():
     import gradio as gr
 
     def make_plan(intent: str):
+        yield (
+            None,
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(
+                value='<p class="progress-copy">Building the experiment plan… This usually takes about a minute.</p>',
+                visible=True,
+            ),
+            gr.update(value="Building experiment plan…", interactive=False),
+        )
         try:
             normalized = validate_user_intent(intent)
             if len(normalized) > 600:
@@ -43,20 +53,21 @@ def create_general_app():
                 "repetitions": 8,
             })
         except (GeneralCoordinatorError, ValueError) as exc:
-            return None, gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), gr.update(visible=False)
-        return planned, gr.update(value=plan_shell(plan_rows(planned["plan"])), visible=True), gr.update(visible=True)
-
-    def start_planning():
-        return (
-            gr.update(
-                value='<p class="progress-copy">Building the experiment plan… This usually takes about a minute.</p>',
-                visible=True,
-            ),
-            gr.update(value="Building experiment plan…", interactive=False),
+            yield (
+                None,
+                gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(value="Build experiment plan", interactive=True),
+            )
+            return
+        yield (
+            planned,
+            gr.update(value=plan_shell(plan_rows(planned["plan"])), visible=True),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(value="Build experiment plan", interactive=True),
         )
-
-    def finish_planning():
-        return gr.update(visible=False), gr.update(value="Build experiment plan", interactive=True)
 
     def confirm_and_run(planned):
         if not isinstance(planned, dict):
@@ -92,17 +103,12 @@ def create_general_app():
         gr.HTML(particle_research_card())
         for chip, example in zip(chips, EXAMPLES):
             chip.click(lambda value=example: value, outputs=question, queue=False)
-        planning = plan_button.click(
-            start_planning,
-            outputs=[status, plan_button],
-            queue=False,
-        ).then(
+        plan_button.click(
             make_plan,
             inputs=question,
-            outputs=[state, plan_view, confirm],
+            outputs=[state, plan_view, confirm, status, plan_button],
             concurrency_limit=1,
         )
-        planning.then(finish_planning, outputs=[status, plan_button], queue=False)
         confirm.click(confirm_and_run, inputs=state, outputs=[status, *cards, details], concurrency_limit=1)
     demo._jump_css = GENERAL_CSS
     demo.queue(default_concurrency_limit=1)
