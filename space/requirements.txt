@@ -1,1 +1,2 @@
 gradio==6.24.0
+jsonschema==4.26.0

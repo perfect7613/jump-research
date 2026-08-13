@@ -1,5 +1,5 @@
 ---
-title: JUMP — Hidden Rule Challenge
+title: JUMP — Computational Experiments
 emoji: ⚗️
 colorFrom: yellow
 colorTo: blue
@@ -10,10 +10,13 @@ pinned: false
 license: other
 ---
 
-# Can an AI discover a hidden rule?
+# Test a supported idea with a simulation
 
-Watch a few dots move. Some secretly belong together. Change how they push or
-pull, then see whether the AI can predict what happens.
+Ask a bounded question about Monty Hall, queue or traffic capacity, or Bernoulli
+probability. JUMP shows the experiment plan for confirmation, records a frozen
+base-Gemma prediction before execution, runs a restricted simulation, and
+compares the prediction with the result.
 
-The demo runs end to end, but the current model is still learning the hidden
-rule. Technical evidence and limitations are shown inside the app.
+Unsupported requests fail closed. The Space does not accept code, URLs, files,
+or real-world actions. The original hidden-rule particle research remains linked
+inside the app as a separate specialized demonstration.
