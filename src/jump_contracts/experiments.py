@@ -552,9 +552,16 @@ def _validate_plan_references(plan: dict[str, Any]) -> None:
     interventions = [item for item in conditions if item["kind"] == "intervention"]
     if len(baselines) != 1 or not interventions:
         raise ExperimentContractError("conditions require exactly one baseline and at least one intervention")
-    assignable = independent | controlled
-    if any(set(item["assignments"]) - assignable for item in conditions):
-        raise ExperimentContractError("conditions may assign only declared independent or controlled variables")
+    if any(set(item["assignments"]) != independent for item in conditions):
+        raise ExperimentContractError("every condition must assign each independent variable and no controlled variable")
+    levels = {item["id"]: item["levels"] for item in plan["variables"]["independent"]}
+    for condition in conditions:
+        for variable_id, assigned in condition["assignments"].items():
+            assigned_values = assigned if isinstance(assigned, list) else [assigned]
+            if any(value not in levels[variable_id] for value in assigned_values):
+                raise ExperimentContractError("condition assignment is outside the independent variable levels")
+    if len(conditions) * plan["sampling"]["repetitions"] > plan["sandbox"]["limits"]["max_rows"]:
+        raise ExperimentContractError("condition/repetition design exceeds the fixed result row limit")
     measurement_ids = _unique_ids(plan["measurements"], "measurement")
     if measurement_ids != dependent:
         raise ExperimentContractError("measurements must cover each dependent variable exactly once")
@@ -571,6 +578,12 @@ def _validate_plan_references(plan: dict[str, Any]) -> None:
             raise ExperimentContractError("prediction/comparison must reference the sole baseline")
         if item["intervention_condition_id"] not in condition_ids or item["intervention_condition_id"] == baseline_id:
             raise ExperimentContractError("prediction/comparison references an unknown intervention")
+    target_by_id = {item["id"]: item for item in targets}
+    for comparison in plan["comparisons"]:
+        target = target_by_id[comparison["id"]]
+        for key in ("measurement_id", "baseline_condition_id", "intervention_condition_id"):
+            if comparison[key] != target[key]:
+                raise ExperimentContractError("prediction target and comparison with the same ID must bind the same test")
     expected_pairing = "paired_by_repetition" if plan["sampling"]["design"] == "paired_common_random_numbers" else "independent_samples"
     if any(item["pairing"] != expected_pairing for item in plan["comparisons"]):
         raise ExperimentContractError("comparison pairing must match the sampling design")
@@ -584,7 +597,7 @@ def _validate_prediction_order(execution: dict[str, Any]) -> None:
     predicted = _parse_time(execution["prediction_recorded_at"])
     started = execution["started_at"]
     completed = execution["completed_at"]
-    if started is not None and predicted > _parse_time(started):
+    if started is not None and predicted >= _parse_time(started):
         raise ExperimentContractError("prediction must be recorded before execution starts")
     if started is not None and completed is not None and _parse_time(started) > _parse_time(completed):
         raise ExperimentContractError("execution cannot complete before it starts")
@@ -633,6 +646,8 @@ def _validate_run_against_plan(run: dict[str, Any], plan: dict[str, Any]) -> Non
         raise ExperimentContractError("completed runs require every condition/repetition measurement exactly once")
     if run["status"] == "failed" and run["comparisons"]:
         raise ExperimentContractError("failed runs cannot contain comparisons")
+    if run["status"] == "completed" and not execution["modal_call_id"]:
+        raise ExperimentContractError("completed runs require a Modal call ID")
     planned_comparisons = {item["id"]: item for item in plan["comparisons"]}
     if run["status"] == "completed" and {item["id"] for item in run["comparisons"]} != set(planned_comparisons):
         raise ExperimentContractError("run comparisons must cover the frozen comparison specs")
@@ -705,10 +720,16 @@ def _comparison_evidence(
             pairing_keys.append(hashlib.sha256(canonical_json(pair)).hexdigest())
     else:
         pair_set = {
+            "design": "independent_repetitions",
             "baseline_row_sha256s": [hashlib.sha256(canonical_json(row)).hexdigest() for row in baseline_rows],
             "intervention_row_sha256s": [hashlib.sha256(canonical_json(row)).hexdigest() for row in intervention_rows],
         }
-        pairing_keys = pair_set["baseline_row_sha256s"] + pair_set["intervention_row_sha256s"]
+        pairing_keys = [
+            hashlib.sha256(canonical_json({"baseline": baseline, "intervention": intervention})).hexdigest()
+            for baseline, intervention in zip(
+                pair_set["baseline_row_sha256s"], pair_set["intervention_row_sha256s"]
+            )
+        ]
     return pairing_keys, pair_set, estimate
 
 
