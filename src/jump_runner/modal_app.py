@@ -709,6 +709,96 @@ def authentic_world_long_horizon_stage_b(
         return result
 
 
+
+def _authorize_behavioral_distillation(*, expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool, confirm_h100: bool) -> dict[str, Any]:
+    from jump_benchmark.behavioral_distillation import MANIFEST_SHA256, behavioral_distillation_manifest
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("behavioral distillation requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("behavioral-distillation immutable identity mismatch")
+    execution = behavioral_distillation_manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100" or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1 or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1 or abs(forecast - execution["forecast_usd"]) > 1e-9
+        or forecast > execution["aggregate_authority_ceiling_usd"]
+    ):
+        raise RunnerError("behavioral-distillation resource or cost contract mismatch")
+    return execution
+
+
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_behavioral_distillation_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_behavioral_distillation_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
+    """Same-image CPU/config/task-promotion preflight; never loads Gemma weights."""
+    import hashlib
+    import tempfile
+    from transformers import AutoConfig, AutoModelForMultimodalLM, AutoTokenizer
+    from safetensors.torch import load_file
+    from jump_benchmark.behavioral_distillation import MANIFEST_SHA256, cpu_preflight, run_contract
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION
+    from jump_benchmark.long_horizon import build_long_horizon_modules
+    from jump_benchmark.long_horizon_stage_b import SOURCE_DECODER_SHA256, SOURCE_ENCODER_SHA256, SOURCE_RELATIVE_ROOT
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("behavioral-distillation preflight identity mismatch")
+    source=VOLUME_PATH/SOURCE_RELATIVE_ROOT; ep=source/"encoder.safetensors"; dp=source/"decoder.safetensors"
+    if hashlib.sha256(ep.read_bytes()).hexdigest()!=SOURCE_ENCODER_SHA256 or hashlib.sha256(dp.read_bytes()).hexdigest()!=SOURCE_DECODER_SHA256:
+        raise RunnerError("behavioral-distillation source checksum mismatch")
+    encoder,decoder=build_long_horizon_modules();encoder.load_state_dict(load_file(ep),strict=True);decoder.load_state_dict(load_file(dp),strict=True);encoder.eval();decoder.eval()
+    tokenizer=AutoTokenizer.from_pretrained(BASE_REPO_ID,revision=BASE_REVISION,trust_remote_code=False)
+    config=AutoConfig.from_pretrained(BASE_REPO_ID,revision=BASE_REVISION,trust_remote_code=False)
+    model_class=AutoModelForMultimodalLM._model_mapping[type(config)]
+    seam=cpu_preflight(tokenizer,encoder,decoder)
+    phase,run=run_contract(expected_manifest_sha256,expected_code_sha,dry_run=True)
+    with tempfile.TemporaryDirectory() as temporary:
+        result=execute_local_run(phase,run,Path(temporary)/"behavioral-distillation-preflight",expected_manifest_sha256)
+    if result.get("status")!="completed" or result["provenance"]["code_version"]!=CODE_VERSION:
+        raise RunnerError("behavioral-distillation canonical preflight failed")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"model_type":config.model_type,"model_class":model_class.__name__,"seam":seam,"base_weights_loaded":False,"gpu_allocated":False,"persistent_root_created":False}
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=3600,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_behavioral_distillation",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_behavioral_distillation(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool=False, confirm_h100: bool=False) -> dict[str, Any]:
+    from jump_benchmark.behavioral_distillation import run_contract
+    _authorize_behavioral_distillation(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-behavioral-distillation"/expected_manifest_sha256/"run"
+    phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed": raise RunnerError(f"behavioral distillation failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-behavioral-distillation")
+def submit_behavioral_distillation(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool=False, confirm_h100: bool=False) -> None:
+    execution=_authorize_behavioral_distillation(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    call=authentic_world_behavioral_distillation.spawn(expected_manifest_sha256,expected_code_sha,confirm_paid=True,confirm_h100=True)
+    record={"app_name":APP_NAME,"function":"authentic_world_behavioral_distillation","call_id":call.object_id,"manifest_sha256":expected_manifest_sha256,"code_sha":expected_code_sha,"forecast_usd":execution["forecast_usd"],"hard_ceiling_usd":execution["aggregate_authority_ceiling_usd"]}
+    registry=Path(".jump/submissions");registry.mkdir(parents=True,exist_ok=True);path=registry/f"{call.object_id}.json"
+    with path.open("x") as handle:
+        handle.write(json.dumps(record,indent=2,sort_keys=True)+"\n");handle.flush();os.fsync(handle.fileno())
+    fd=os.open(registry,os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    print(json.dumps({**record,"record_path":str(path)},sort_keys=True))
+
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
     mode: str,
