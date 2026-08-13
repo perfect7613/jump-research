@@ -1,5 +1,5 @@
 ---
-title: JUMP — Computational Experiments
+title: JUMP — Visual Thought Experiments
 emoji: ⚗️
 colorFrom: yellow
 colorTo: blue
@@ -10,13 +10,13 @@ pinned: false
 license: other
 ---
 
-# Test a supported idea with a simulation
+# Compare two small simulated worlds
 
-Ask a bounded question about Monty Hall, queue or traffic capacity, or Bernoulli
-probability. JUMP shows the experiment plan for confirmation, records a frozen
-base-Gemma prediction before execution, runs a restricted simulation, and
-compares the prediction with the result.
+Ask a concrete question about a small world and one changed rule. JUMP shows the
+declarative plan for confirmation, records a prediction, then renders baseline
+and counterfactual states from a restricted deterministic simulator.
 
-Unsupported requests fail closed. The Space does not accept code, URLs, files,
-or real-world actions. The original hidden-rule particle research remains linked
-inside the app as a separate specialized demonstration.
+The frames are deterministic simulation states, not learned-latent
+reconstructions. Unsupported requests fail closed. The Space does not accept
+code, URLs, files, or real-world actions. The earlier v1 numeric route remains an
+explicit fallback while visual v2 is the primary experience.
