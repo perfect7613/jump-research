@@ -275,6 +275,68 @@ def _live_result(runtime: dict[str, Any], request: dict[str, Any]) -> dict[str, 
     return response
 
 
+def injection_sensitivity_diagnostic(
+    cache_root: Path, commit_cache: Callable[[], None]
+) -> dict[str, Any]:
+    """Compare zero-z with one fixed nonzero bounded z; never train or tune."""
+    import torch
+
+    from jump_benchmark.authentic_stage_d import (
+        _episode,
+        _target_text,
+        persistent_z_injection,
+        prompt_tensors,
+    )
+
+    started = time.monotonic()
+    runtime = _load_runtime(cache_root, commit_cache)
+    prompt = prompt_tensors(runtime["tokenizer"])
+    input_ids = prompt["input_ids"].to("cuda")
+    attention = prompt["attention_mask"].to("cuda")
+    synthetic = torch.arange(1, 17, dtype=torch.float32, device="cuda").unsqueeze(0)
+    synthetic = synthetic / synthetic.norm(dim=-1, keepdim=True)
+    target_text = _target_text(_episode(77231, "stage-d-diagnostic")["target"])
+    target_first_token = int(
+        runtime["tokenizer"](target_text, add_special_tokens=False)["input_ids"][0]
+    )
+    with torch.no_grad(), persistent_z_injection(
+        runtime["model"], runtime["projector"], synthetic, enabled=False
+    ):
+        zero_logits = runtime["model"](
+            input_ids=input_ids, attention_mask=attention
+        ).logits[0, -1].float()
+    with torch.no_grad(), persistent_z_injection(
+        runtime["model"], runtime["projector"], synthetic, enabled=True
+    ):
+        perturbed_logits = runtime["model"](
+            input_ids=input_ids, attention_mask=attention
+        ).logits[0, -1].float()
+    delta = perturbed_logits - zero_logits
+    duration = time.monotonic() - started
+    gate = float(torch.tanh(runtime["projector"].gate.float()).item())
+    return {
+        "schema_version": "jump.track-h-stage-d-injection-diagnostic/v1",
+        "status": "completed",
+        "engineering_only": True,
+        "scientific_evidence": False,
+        "trained_or_tuned": False,
+        "code_sha": os.environ["JUMP_CODE_VERSION"],
+        "repository_revision": CANONICAL_REPO_REVISION,
+        "component_manifest_sha256": COMPONENT_MANIFEST_SHA256,
+        "checkpoint_id": CHECKPOINT_ID,
+        "synthetic_z_norm": float(synthetic.norm().item()),
+        "synthetic_z_nonzero": bool(torch.count_nonzero(synthetic).item()),
+        "gate_tanh": gate,
+        "target_first_token_logit_delta": float(delta[target_first_token].item()),
+        "all_logits_l2_delta": float(delta.norm().item()),
+        "all_logits_max_abs_delta": float(delta.abs().max().item()),
+        "injection_effective": bool(delta.abs().max().item() > 0.0),
+        "duration_seconds": duration,
+        "estimated_cost_usd": duration / 3600 * 3.9492,
+        "claim_label": "bounded synthetic-z injection sensitivity diagnostic; engineering only",
+    }
+
+
 def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
     from fastapi import FastAPI, HTTPException, Request
 

@@ -643,6 +643,22 @@ def authentic_stage_d_live_http_preflight() -> dict[str, Any]:
     return http_boundary_preflight(Path("/hf-cache"), stage_d_live_cache.commit)
 
 
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=900,
+    max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_stage_d_injection_diagnostic",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_stage_d_injection_diagnostic() -> dict[str, Any]:
+    from jump_runner.stage_d_live import injection_sensitivity_diagnostic
+
+    return injection_sensitivity_diagnostic(Path("/hf-cache"), stage_d_live_cache.commit)
+
+
 @app.local_entrypoint(name="submit-stage-c")
 def submit_stage_c(
     expected_manifest_sha256: str,
