@@ -1,5 +1,4 @@
 """Secure live transport for the authentic Stage D engineering pipeline."""
-from __future__ import annotations
 
 import base64
 import hashlib
@@ -307,3 +306,26 @@ def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
+
+
+def http_boundary_preflight() -> dict[str, Any]:
+    """Exercise the actual ASGI request boundary without loading weights."""
+    from fastapi.testclient import TestClient
+
+    app = build_live_app(
+        cache_root=Path("/tmp/preflight-cache"),
+        commit_cache=lambda: (_ for _ in ()).throw(RuntimeError("weights must not load")),
+    )
+    response = TestClient(app).post(
+        "/v1/experiment",
+        json={
+            "schema_version": "jump.experiment-intent/v1",
+            "intent": "Predict where the six objects move next.",
+            "session_id": "preflight",
+            "seed": 1,
+            "max_steps": 4,
+        },
+    )
+    if response.status_code != 401:
+        raise RuntimeError(f"live HTTP boundary did not reject unauthenticated input: {response.status_code}")
+    return {"status": "passed", "http_status": 401, "weights_loaded": False, "gpu_allocated": False}
