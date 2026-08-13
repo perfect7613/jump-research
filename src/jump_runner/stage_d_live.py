@@ -175,7 +175,8 @@ def _live_result(runtime: dict[str, Any], request: dict[str, Any]) -> dict[str, 
     ).encode("utf-8")
     run_id = "live-" + uuid.uuid4().hex
     spec_sha = sha256_json(plan)
-    structured_score = score_episode(answer, _stage_d_target(recipient["scoring_target"]))
+    # Targets remain sealed server-side and are consulted only after generation.
+    structured_score = score_episode(answer, _stage_d_target(recipient["target"]))
     producer_bindings = {
         "experiment_id": plan["experiment_id"],
         "experiment_spec_sha256": spec_sha,
