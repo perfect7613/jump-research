@@ -1,5 +1,5 @@
 ---
-title: JUMP — Six-object experiments
+title: JUMP — Computational Experiments
 emoji: ⚗️
 colorFrom: yellow
 colorTo: blue
@@ -10,11 +10,13 @@ pinned: false
 license: other
 ---
 
-# JUMP
+# Test a supported idea with a simulation
 
-Describe a bounded experiment in a synthetic six-object physics world, confirm
-the parsed plan, and run the authenticated engineering pipeline.
+Ask a bounded question about Monty Hall, queue or traffic capacity, or Bernoulli
+probability. JUMP shows the experiment plan for confirmation, records a frozen
+base-Gemma prediction before execution, runs a restricted simulation, and
+compares the prediction with the result.
 
-The current Stage D result is null: own-z equaled no-z and the donor shift was
-zero. The demo makes no informative-representation, behavioral, causal, or
-mechanistic claim.
+Unsupported requests fail closed. The Space does not accept code, URLs, files,
+or real-world actions. The original hidden-rule particle research remains linked
+inside the app as a separate specialized demonstration.

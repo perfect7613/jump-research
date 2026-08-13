@@ -16,42 +16,52 @@ from .flow import (
 )
 from .presentation import plan_html, result_sections
 
-QUESTION = "What do you want to test in this six-object world?"
+QUESTION = "What should the dots do differently?"
 EXAMPLES = (
-    "Make matching objects repel instead of attract.",
-    "Swap what World A learned into World B.",
-    "Test whether the old force rule still fits.",
+    "Make matching dots push apart.",
+    "Swap the hidden groups between two scenes.",
+    "Check whether the old rule is wrong.",
 )
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,600&display=swap');
 :root, .gradio-container {
-  --paper: #f4f0e7; --sheet: #fffdf7; --ink: #181711; --blue: #214a9b;
-  --red: #c8442f; --line: #d6d0c3; --green: #25704a;
+  --paper: #f2efe7; --sheet: #fffdf8; --ink: #17150f; --muted: #514d44;
+  --blue: #244fb3; --red: #b53224; --line: #c9c1b1; --green: #17663d;
 }
-body, .gradio-container { background: var(--paper) !important; color: var(--ink) !important; }
+html, body, .gradio-container, .gradio-container .app, .gradio-container .main,
+.gradio-container .fillable, .dark, .dark .app, .dark .main {
+  background: var(--paper) !important; color: var(--ink) !important;
+}
+.gradio-container, .gradio-container * { color: var(--ink); }
 .gradio-container { max-width: 980px !important; font-family: 'Newsreader', Georgia, serif !important; }
-.jump-shell { padding: 56px 8px 24px; }
+.jump-shell { padding: 48px 8px 24px; }
 .jump-kicker, .eyebrow, .step-number, .fixture-label, .scope-note,
 .plan-grid dt, .subscores dt, .tech-copy { font-family: 'DM Mono', monospace; }
-.jump-kicker { color: var(--blue); font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
-.jump-title { font-size: clamp(48px, 8vw, 82px); line-height: .92; letter-spacing: -.045em; margin: 18px 0; max-width: 820px; }
-.jump-deck { font-size: 21px; line-height: 1.45; max-width: 680px; color: #4c493f; }
+.jump-kicker { color: var(--blue) !important; font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
+.jump-title { color: var(--ink) !important; font-size: clamp(46px, 8vw, 80px); line-height: .94; letter-spacing: -.04em; margin: 18px 0; max-width: 850px; }
+.jump-deck { font-size: 21px; line-height: 1.45; max-width: 760px; color: var(--muted) !important; }
+.jump-deck strong { color: var(--ink) !important; font-weight: 600; }
 .fixture-banner { margin-top: 28px; padding: 10px 14px; border: 1px solid var(--red); color: var(--red); font: 500 11px 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
-.jump-input textarea { font-family: 'Newsreader', Georgia, serif !important; font-size: 20px !important; line-height: 1.45 !important; background: var(--sheet) !important; border: 1px solid var(--ink) !important; }
-.example-label { font: 11px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .1em; color: #6d685c; margin: 10px 0 2px; }
-.example-chip button { border: 1px solid var(--line) !important; background: transparent !important; color: var(--ink) !important; border-radius: 999px !important; font: 12px 'DM Mono', monospace !important; transition: border-color 150ms ease, transform 150ms cubic-bezier(.23,1,.32,1) !important; }
+.gradio-container label, .gradio-container .label, .gradio-container .info,
+.gradio-container .jump-input label, .gradio-container .jump-input .info { color: var(--ink) !important; background: transparent !important; }
+.jump-input, .jump-input .form, .jump-input .wrap, .jump-input > div { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+.jump-input textarea { font-family: 'Newsreader', Georgia, serif !important; font-size: 20px !important; line-height: 1.45 !important; background: var(--sheet) !important; border: 1px solid var(--ink) !important; color: var(--ink) !important; }
+.jump-input textarea::placeholder { color: #777164 !important; opacity: 1; }
+.example-label { font: 11px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .1em; color: var(--muted) !important; margin: 10px 0 2px; }
+.example-chip button { border: 1px solid var(--line) !important; background: var(--sheet) !important; color: var(--ink) !important; border-radius: 999px !important; font: 12px 'DM Mono', monospace !important; transition: border-color 150ms ease, transform 150ms cubic-bezier(.23,1,.32,1) !important; }
 @media (hover:hover) and (pointer:fine) { .example-chip button:hover { border-color: var(--blue) !important; } }
 .example-chip button:active, .run-button button:active { transform: scale(.97); }
 .run-button button { min-height: 52px; background: var(--blue) !important; color: white !important; border: 0 !important; border-radius: 2px !important; font: 500 14px 'DM Mono', monospace !important; transition: transform 150ms cubic-bezier(.23,1,.32,1) !important; }
-.sheet, .result-card { background: var(--sheet); border-top: 3px solid var(--ink); padding: 30px 32px; margin-top: 34px; }
+.sheet, .result-card { background: var(--sheet); color: var(--ink); border-top: 3px solid var(--ink); padding: 30px 32px; margin-top: 34px; }
+.sheet p, .result-card p, .sheet dd, .result-card dd { color: var(--ink); }
 .eyebrow, .step-number { font-size: 11px; color: var(--blue); letter-spacing: .1em; text-transform: uppercase; }
-.sheet h2, .result-card h2 { font-size: 32px; margin: 10px 0 20px; }
+.sheet h2, .result-card h2 { color: var(--ink) !important; font-size: 32px; margin: 10px 0 20px; }
 .plan-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .plan-grid div { background: var(--sheet); padding: 18px; }
 .plan-grid dt, .subscores dt { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #6d685c; }
 .plan-grid dd, .subscores dd { margin: 8px 0 0; font-size: 17px; }
-.scope-note { font-size: 11px; line-height: 1.6; color: #6d685c; margin-top: 20px; }
+.scope-note { font-size: 11px; line-height: 1.6; color: var(--muted) !important; margin-top: 20px; }
 .result-card { position: relative; }
 .result-card img { width: 100%; display: block; border: 1px solid var(--line); margin-top: 22px; }
 .result-card pre { white-space: pre-wrap; background: var(--paper); border: 1px solid var(--line); padding: 18px; font: 12px/1.6 'DM Mono', monospace; }
@@ -61,11 +71,11 @@ body, .gradio-container { background: var(--paper) !important; color: var(--ink)
 .score-pair span { font-size: 18px; }.score-pair strong { font: 500 15px 'DM Mono', monospace; }
 .good { color: var(--green); }.bad { color: var(--red); }
 .subscores { margin-top: 18px; }.subscores div { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 10px 0; }
-.quiet { color: #6d685c; font-size: 15px; }.evidence-card { border-color: var(--blue); }
+.quiet { color: var(--muted) !important; font-size: 15px; }.evidence-card { border-color: var(--blue); }
 .progress-copy { font: 12px 'DM Mono', monospace; color: var(--blue); }
 .error-copy { border-left: 3px solid var(--red); padding: 14px 18px; background: #fff5f1; }
 .tech-copy { font-size: 11px; color: #5d594f; }
-@media (max-width: 720px) { .jump-shell { padding-top: 28px; } .plan-grid { grid-template-columns: 1fr 1fr; } .score-pair { grid-template-columns: 1fr; } .sheet, .result-card { padding: 24px 20px; } }
+@media (max-width: 720px) { .jump-shell { padding-top: 24px; } .jump-title { font-size: clamp(40px, 12vw, 58px); } .jump-deck { font-size: 19px; } .plan-grid { grid-template-columns: 1fr 1fr; } .score-pair { grid-template-columns: 1fr; } .sheet, .result-card { padding: 24px 20px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
 """
 
@@ -74,8 +84,8 @@ def _friendly_error(message: str) -> str:
     lowered = message.lower()
     if any(word in lowered for word in ("url", "uri", "path", "code", "shell", "control", "ambiguous")):
         return (
-            "That request doesn’t fit this six-object world. Try changing motion, "
-            "hidden groups, attraction or repulsion, force strength, or a World A/World B swap."
+            "That request doesn’t fit this dot experiment. Try changing how the dots move, "
+            "which dots secretly belong together, or whether they push or pull."
         )
     return message
 
@@ -149,28 +159,32 @@ def create_app(*, backend=None, enable_queue: bool = True):
             gr.update(value=details, visible=True),
         )
 
-    with gr.Blocks(title="JUMP — test an idea in a tiny physics world") as demo:
+    with gr.Blocks(title="JUMP — can an AI change its theory?") as demo:
         planned_state = gr.State(None)
 
         gr.HTML(
-            '<header class="jump-shell"><p class="jump-kicker">JUMP · six-object physics</p>'
-            '<h1 class="jump-title">Test an idea in a tiny physics world.</h1>'
-            '<p class="jump-deck">Describe a bounded experiment with six moving objects. '
-            'JUMP turns it into a safe plan, runs it, and shows what happened.</p>'
-            '<p class="scope-note">Engineering demo only. The current Stage D result was null: '
-            'the learned world state did not improve or shift the frozen model’s answer. '
-            'This is not evidence of an informative representation or mechanism.</p>'
+            '<header class="jump-shell"><p class="jump-kicker">JUMP · executable thought experiments</p>'
+            '<h1 class="jump-title">Can an AI change its theory when the evidence proves it wrong?</h1>'
+            '<p class="jump-deck"><strong>JUMP is a controlled physics thought experiment.</strong> '
+            'Six identical particles move across a 2D canvas. Each secretly belongs to one of two groups. '
+            'That hidden grouping decides which pairs attract, which repel, and how strongly they interact.</p>'
+            '<p class="jump-deck">Describe a change to test. JUMP turns it into a safe simulator plan, '
+            'runs the world, and asks a frozen AI to predict the result. Because the simulator knows the '
+            'true hidden groups and force law, it can check whether the AI rejected a bad rule and proposed '
+            'the right replacement.</p>'
+            '<p class="scope-note">The full experiment runs end to end, but the current model still gets '
+            'the hidden grouping and force law wrong.</p>'
             + (
                 f'<p class="fixture-banner">{backend.label} · for local contract and visual QA only</p>'
                 if not backend.is_live
-                else f'<p class="fixture-banner">{backend.label}</p>'
+                else ""
             )
             + '</header>'
         )
         intent = gr.Textbox(
             label=QUESTION,
-            placeholder="For example: What changes if objects that used to attract each other begin to repel?",
-            info="Six objects only · no code, links, files, or real-world tasks · 600 characters max",
+            placeholder="For example: Make matching dots push apart.",
+            info="Dot experiments only · no code, links, files, or real-world tasks · 600 characters max",
             lines=4,
             max_lines=7,
             elem_classes=["jump-input"],
