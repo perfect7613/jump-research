@@ -63,6 +63,7 @@ stage_d_image = (
     .apt_install("git")
     .pip_install(
         "accelerate==1.10.1",
+        "fastapi[standard]==0.116.1",
         "huggingface_hub==1.5.0",
         "jsonschema==4.26.0",
         "numpy==2.3.2",
@@ -74,6 +75,7 @@ stage_d_image = (
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+stage_d_live_cache = modal.Volume.from_name("jump-stage-d-live-cache-v1", create_if_missing=True)
 dispatch_leases = modal.Dict.from_name("jump-experiment-dispatch-lease-v1", create_if_missing=True)
 app = modal.App(APP_NAME)
 
@@ -604,6 +606,27 @@ def submit_stage_d(
     finally:
         os.close(directory_fd)
     print(json.dumps({**record, "record_path": str(record_path)}, sort_keys=True))
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=900,
+    max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
+    secrets=[
+        modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"]),
+        modal.Secret.from_name("jump-authentic-live-auth", required_keys=["JUMP_MODAL_TOKEN"]),
+    ],
+    name="authentic_stage_d_live",
+)
+@modal.concurrent(max_inputs=1)
+@modal.asgi_app()
+def authentic_stage_d_live():
+    """Authenticated, bounded live Stage D engineering endpoint."""
+    from jump_runner.stage_d_live import build_live_app
+
+    return build_live_app(cache_root=Path("/hf-cache"), commit_cache=stage_d_live_cache.commit)
 
 
 @app.local_entrypoint(name="submit-stage-c")
