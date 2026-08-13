@@ -11,6 +11,7 @@ import json
 import math
 import re
 from copy import deepcopy
+from fractions import Fraction
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
@@ -441,6 +442,7 @@ def _validate_spec_semantics(spec: dict[str, Any]) -> None:
         if rule["target_type"] is not None and rule["target_type"] not in entity_ids:
             raise ThoughtExperimentContractError("rule target_type is unknown")
         _finite_tree(rule["parameters"], "rule parameters")
+        _validate_rule_semantics(rule, entity_by_id, spec["world"])
     conditions = spec["conditions"]
     condition_ids = _unique((item["id"] for item in conditions), "condition")
     baselines = [item for item in conditions if item["kind"] == "baseline"]
@@ -480,7 +482,8 @@ def _validate_spec_semantics(spec: dict[str, Any]) -> None:
     charts = spec["visualization"]["chart_measurement_ids"]
     if len(charts) != len(set(charts)) or not set(charts).issubset(measurement_ids):
         raise ThoughtExperimentContractError("visualization chart references are invalid")
-    required_frames = duration // spec["visualization"]["frame_stride"] + 1
+    stride = spec["visualization"]["frame_stride"]
+    required_frames = (duration + stride - 1) // stride + 1
     if required_frames > spec["visualization"]["max_frames"]:
         raise ThoughtExperimentContractError("frame_stride/max_frames cannot represent the requested duration")
     if len(condition_ids) * sum(item["count"] for item in entities) * required_frames > 10000:
@@ -515,10 +518,60 @@ def _validate_run_semantics(run: dict[str, Any], spec: dict[str, Any]) -> None:
         seen.add(key)
         baseline = results[baseline_id]["summary"][comparison["measurement_id"]]
         counterfactual = results[key[1]]["summary"][comparison["measurement_id"]]
-        if comparison["baseline_final"] != baseline or comparison["counterfactual_final"] != counterfactual or comparison["difference"] != counterfactual - baseline:
+        difference = float(Fraction(str(counterfactual)) - Fraction(str(baseline)))
+        if comparison["baseline_final"] != baseline or comparison["counterfactual_final"] != counterfactual or comparison["difference"] != difference:
             raise ThoughtExperimentContractError("comparison must be recomputed from condition summaries")
     if seen != expected:
         raise ThoughtExperimentContractError("comparisons must cover each measurement/counterfactual pair")
+
+
+def _validate_rule_semantics(rule: dict[str, Any], entities: dict[str, dict[str, Any]], world: dict[str, Any]) -> None:
+    op, target, parameters = rule["op"], rule["target_type"], rule["parameters"]
+    numeric = lambda name: isinstance(parameters[name], (int, float)) and not isinstance(parameters[name], bool)
+    probability = lambda name: numeric(name) and 0 <= parameters[name] <= 1
+    if op == "move_2d":
+        if target is None or not {"vx", "vy"}.issubset(entities[target]["initial_state"]["numeric"]):
+            raise ThoughtExperimentContractError("move_2d requires target numeric vx and vy states")
+        if not probability("damping") or not numeric("max_speed") or not 0 <= parameters["max_speed"] <= 100:
+            raise ThoughtExperimentContractError("move_2d parameters are outside fixed bounds")
+    elif op == "random_walk_2d":
+        if target is None or not numeric("step_scale") or not 0 <= parameters["step_scale"] <= 100:
+            raise ThoughtExperimentContractError("random_walk_2d parameters are invalid")
+    elif op == "pairwise_force_2d":
+        selected = entities.values() if target is None else [entities[target]]
+        if any(not {"vx", "vy"}.issubset(item["initial_state"]["numeric"]) for item in selected):
+            raise ThoughtExperimentContractError("pairwise_force_2d requires numeric vx and vy states")
+        if not all(numeric(name) for name in ("strength", "exponent", "softening")) or not -1000 <= parameters["strength"] <= 1000 or not 0 <= parameters["exponent"] <= 4 or not 0 < parameters["softening"] <= 100:
+            raise ThoughtExperimentContractError("pairwise_force_2d parameters are outside fixed bounds")
+    elif op == "graph_diffusion":
+        state = parameters["state"]
+        if target is not None or world["graph"]["kind"] == "none" or world["graph"]["directed"] or not isinstance(state, str) or any(state not in item["initial_state"]["numeric"] for item in entities.values()):
+            raise ThoughtExperimentContractError("graph_diffusion requires one undirected graph and a shared numeric state")
+        if not numeric("rate") or not 0 <= parameters["rate"] <= 0.5:
+            raise ThoughtExperimentContractError("graph_diffusion rate is outside the stable bound")
+    elif op == "graph_contagion":
+        state = parameters["state"]
+        labels = (parameters["susceptible"], parameters["infected"], parameters["recovered"])
+        if target is not None or world["graph"]["kind"] == "none" or world["graph"]["directed"] or not all(isinstance(item, str) and item for item in (state, *labels)) or any(state not in item["initial_state"]["categorical"] for item in entities.values()):
+            raise ThoughtExperimentContractError("graph_contagion requires one undirected graph and a shared categorical state")
+        if not probability("transmission_probability") or not probability("recovery_probability"):
+            raise ThoughtExperimentContractError("graph_contagion probabilities must lie in [0,1]")
+    elif op == "predator_prey_2d":
+        if target is not None or parameters["prey_type"] not in entities or parameters["predator_type"] not in entities or parameters["prey_type"] == parameters["predator_type"]:
+            raise ThoughtExperimentContractError("predator_prey_2d type references are invalid")
+        if not all(probability(name) for name in ("prey_growth", "predation_rate", "predator_efficiency", "predator_decay")) or not numeric("interaction_radius") or not 0 < parameters["interaction_radius"] <= 1000:
+            raise ThoughtExperimentContractError("predator_prey_2d parameters are outside fixed bounds")
+    elif op == "lane_traffic_2d":
+        state = parameters["speed_state"]
+        if target is None or not isinstance(state, str) or state not in entities[target]["initial_state"]["numeric"]:
+            raise ThoughtExperimentContractError("lane_traffic_2d requires a target numeric speed state")
+        if not all(numeric(name) for name in ("desired_speed", "headway", "road_y")) or not 0 <= parameters["desired_speed"] <= 100 or not 0 <= parameters["headway"] <= world["bounds"]["width"] or not 0 <= parameters["road_y"] <= world["bounds"]["height"]:
+            raise ThoughtExperimentContractError("lane_traffic_2d parameters are outside world bounds")
+    elif op == "queue_agents_2d":
+        if target is None or entities[target]["initial_state"]["categorical"].get("queue_status") not in {"waiting", "queued", "served"}:
+            raise ThoughtExperimentContractError("queue_agents_2d requires categorical queue_status")
+        if not probability("arrival_probability") or not numeric("service_capacity") or int(parameters["service_capacity"]) != parameters["service_capacity"] or not 0 <= parameters["service_capacity"] <= 32 or not numeric("queue_x") or not numeric("service_x"):
+            raise ThoughtExperimentContractError("queue_agents_2d parameters are outside fixed bounds")
 
 
 def _unique(values: Any, label: str) -> set[str]:

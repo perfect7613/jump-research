@@ -55,6 +55,7 @@ model_image = (
 )
 model_cache = modal.Volume.from_name("jump-general-gemma-cache-v1", create_if_missing=True)
 coordinator_state = modal.Dict.from_name("jump-general-coordinator-state-v1", create_if_missing=True)
+visual_coordinator_state = modal.Dict.from_name("jump-visual-coordinator-state-v2", create_if_missing=True)
 
 
 @app.function(
@@ -85,6 +86,37 @@ def execute_restricted_simulation(
     }:
         raise ValueError("execution requires confirmation bound to this plan and prediction")
     return _execute_validated_source(source, plan)
+
+
+@app.function(
+    image=simulator_image,
+    cpu=1.0,
+    memory=512,
+    timeout=60,
+    max_containers=1,
+    restrict_modal_access=True,
+    single_use_containers=True,
+    block_network=True,
+    name="execute_visual_spec_v2",
+)
+def execute_visual_spec_v2(
+    spec_value: dict[str, Any],
+    confirmation: dict[str, Any],
+    prediction: dict[str, Any],
+) -> dict[str, Any]:
+    """Interpret a sealed declarative spec; no generated program is accepted."""
+    from jump_contracts.thought_experiments import canonical_json, validate_experiment_spec
+    from .visual_engine import execute_visual_spec
+
+    spec = validate_experiment_spec(spec_value)
+    prediction_sha = hashlib.sha256(canonical_json(prediction)).hexdigest()
+    if confirmation != {
+        "confirmed": True,
+        "spec_sha256": spec["spec_sha256"],
+        "prediction_sha256": prediction_sha,
+    }:
+        raise ValueError("visual execution requires confirmation bound to the spec and prediction")
+    return execute_visual_spec(spec)
 
 
 def execute_prepared_on_modal(prepared: "PreparedExecution") -> dict[str, Any]:
@@ -182,6 +214,58 @@ def general_coordinator_compute(action: str, body: dict[str, Any]) -> dict[str, 
 
 @app.function(
     image=gateway_image,
+    cpu=1.0,
+    memory=1024,
+    timeout=1200,
+    max_containers=1,
+    name="visual_coordinator_compute_v2",
+)
+@modal.concurrent(max_inputs=1)
+def visual_coordinator_compute_v2(action: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Compile and execute one confirmed visual ExperimentSpec v2."""
+    from .gemma_planner import BASE_REPO_ID, BASE_REVISION, TRANSFORMERS_REVISION
+    from .visual_coordinator import VisualCoordinator
+    from .workflow import FrozenModel
+    from jump_contracts.thought_experiments import canonical_json
+
+    model = FrozenModel(model_id=BASE_REPO_ID, revision=BASE_REVISION)
+
+    def generate(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return general_frozen_gemma.remote({"action": kind, "payload": payload})
+
+    def simulate(spec: dict[str, Any], prediction: dict[str, Any], prediction_recorded_at: str) -> dict[str, Any]:
+        confirmation = {
+            "confirmed": True,
+            "spec_sha256": spec["spec_sha256"],
+            "prediction_sha256": hashlib.sha256(canonical_json(prediction)).hexdigest(),
+        }
+        started_at = datetime.now(timezone.utc)
+        call = execute_visual_spec_v2.spawn(spec, confirmation, prediction)
+        result = call.get(timeout=70)
+        return {
+            "modal_call_id": call.object_id,
+            "started_at": started_at,
+            "completed_at": datetime.now(timezone.utc),
+            "result": result,
+        }
+
+    coordinator = VisualCoordinator(
+        state=visual_coordinator_state,
+        model=model,
+        transformers_revision=TRANSFORMERS_REVISION,
+        model_generate=generate,
+        simulate=simulate,
+        code_version=CODE_VERSION,
+    )
+    if action == "visual_spec":
+        return coordinator.compile(body)
+    if action == "visual_confirm":
+        return coordinator.confirm(body)
+    raise ValueError("unsupported visual coordinator action")
+
+
+@app.function(
+    image=gateway_image,
     cpu=0.5,
     memory=512,
     timeout=1200,
@@ -197,7 +281,14 @@ def general_experiment_gateway():
     from .gemma_planner import BASE_REPO_ID, BASE_REVISION, TRANSFORMERS_REVISION
 
     async def run_action(action: str, body: dict[str, Any]) -> dict[str, Any]:
+        if action in {"visual_spec", "visual_confirm"}:
+            return await visual_coordinator_compute_v2.remote.aio(action, body)
         return await general_coordinator_compute.remote.aio(action, body)
+
+    from jump_contracts.thought_experiments import (
+        EXPERIMENT_SPEC_SCHEMA_SHA256,
+        THOUGHT_EXPERIMENT_RUN_SCHEMA_SHA256,
+    )
 
     return build_general_gateway(
         run_action,
@@ -212,6 +303,14 @@ def general_experiment_gateway():
                 "adapter_id": None,
             },
             "code_version": CODE_VERSION,
+            "thought_experiments_v2": {
+                "question_schema_version": "jump.thought-experiment-question/v2",
+                "spec_schema_sha256": EXPERIMENT_SPEC_SCHEMA_SHA256,
+                "run_schema_sha256": THOUGHT_EXPERIMENT_RUN_SCHEMA_SHA256,
+                "engine_id": "jump.declarative-visual-engine/v2",
+                "generated_code": False,
+                "learned_decoder": False,
+            },
         },
     )
 
@@ -219,4 +318,5 @@ def general_experiment_gateway():
 __all__ = [
     "app", "execute_restricted_simulation", "execute_prepared_on_modal",
     "general_frozen_gemma", "general_coordinator_compute", "general_experiment_gateway",
+    "execute_visual_spec_v2", "visual_coordinator_compute_v2",
 ]
