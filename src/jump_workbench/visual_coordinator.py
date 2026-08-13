@@ -74,6 +74,7 @@ class VisualCoordinator:
             }
             if set(generated) != expected:
                 raise VisualCoordinatorError("compiler output fields do not match ExperimentSpec v2")
+            generated = _complete_nullable_spec_fields(generated)
             schedule = dict(generated["schedule"])
             schedule["seed"] = request["seed"]
             schedule["repetitions"] = request["repetitions"]
@@ -234,6 +235,27 @@ def _validate_revision(value: Any) -> dict[str, Any]:
     if not isinstance(value["interpretation"], str) or not value["interpretation"].strip() or len(value["interpretation"]) > 500:
         raise VisualCoordinatorError("visual interpretation must contain 1 through 500 characters")
     return {**value, "interpretation": value["interpretation"].strip()}
+
+
+def _complete_nullable_spec_fields(generated: dict[str, Any]) -> dict[str, Any]:
+    """Materialize required nullable keys; never infer an operation or value."""
+    value = dict(generated)
+    dynamics = dict(value["dynamics"])
+    dynamics["rules"] = [
+        {**item, "target_type": item.get("target_type")}
+        for item in dynamics["rules"]
+    ]
+    value["dynamics"] = dynamics
+    value["measurements"] = [
+        {
+            **item,
+            "entity_type": item.get("entity_type"),
+            "state": item.get("state"),
+            "category": item.get("category"),
+        }
+        for item in value["measurements"]
+    ]
+    return value
 
 
 def _timestamp(value: datetime) -> str:
