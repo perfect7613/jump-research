@@ -118,51 +118,13 @@ class MetricTests(unittest.TestCase):
             result["indirect_effect"], result["total_effect"] - result["direct_effect"]
         )
 
-    def test_g6_g7_g8_require_complete_distinct_checkpoint_evidence(self):
-        fixture = load_fixture()
-        def record(key):
-            return {
-                "identity": fixture["checkpoint_identities"][key],
-                "g3_passed": True,
-                "g5_passed": True,
-                "total_ci_low": 0.4,
-                "ordered_nie_ci_lows": [0.2, 0.1],
-                "mediated_proportion": 0.3,
-                "specificity_passed": True,
-                "ood_effect_ci_low": 0.1,
-                "ood_retention": 0.6,
-                "provenance_hash_match_rate": 1.0,
-            }
-
-        primary = ConfirmatoryEvidence.from_dict(record("checkpoint-primary"))
-        replication = ConfirmatoryEvidence.from_dict(record("checkpoint-replication"))
-        gates = evaluate_confirmatory_gates(primary, replication)
-        self.assertTrue(all(gates[name]["passed"] for name in ("g6", "g7", "g8")))
-        self.assertFalse(evaluate_confirmatory_gates(None, None)["g8"]["passed"])
-        self.assertFalse(evaluate_confirmatory_gates(primary, None)["g8"]["passed"])
-
-        alias = record("checkpoint-primary")
-        alias["identity"] = {**alias["identity"], "checkpoint_id": "an-alias"}
-        self.assertFalse(
-            evaluate_confirmatory_gates(primary, ConfirmatoryEvidence.from_dict(alias))["g8"]["passed"]
-        )
-        g6_failure = record("checkpoint-primary")
-        g6_failure["specificity_passed"] = False
-        self.assertFalse(
-            evaluate_confirmatory_gates(ConfirmatoryEvidence.from_dict(g6_failure), replication)["g6"]["passed"]
-        )
-        self.assertFalse(
-            evaluate_confirmatory_gates(ConfirmatoryEvidence.from_dict(g6_failure), replication)["g8"]["passed"]
-        )
-        g7_failure = record("checkpoint-replication")
-        g7_failure["ood_retention"] = 0.49
-        self.assertFalse(
-            evaluate_confirmatory_gates(primary, ConfirmatoryEvidence.from_dict(g7_failure))["g8"]["passed"]
-        )
-        incomplete = record("checkpoint-primary")
-        incomplete.pop("mediated_proportion")
-        with self.assertRaisesRegex(ValueError, "exactly"):
-            ConfirmatoryEvidence.from_dict(incomplete)
+    def test_trusted_gate_summaries_cannot_enter_confirmatory_evidence(self):
+        with self.assertRaisesRegex(ValueError, "trusted confirmatory"):
+            ConfirmatoryEvidence.from_dict(
+                {"g3_passed": True, "g5_passed": True, "specificity_passed": True}
+            )
+        gates = evaluate_confirmatory_gates(None, None)
+        self.assertTrue(all(not gates[name]["passed"] for name in ("g3", "g5", "g6", "g7", "g8")))
 
 
 if __name__ == "__main__":

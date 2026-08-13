@@ -58,7 +58,30 @@ track_h_image = (
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
+stage_d_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git")
+    .pip_install(
+        "accelerate==1.10.1",
+        "fastapi[standard]==0.116.1",
+        "huggingface_hub==1.5.0",
+        "jsonschema==4.26.0",
+        "numpy==2.3.2",
+        "safetensors==0.8.0",
+        "torch==2.11.0",
+        "git+https://github.com/huggingface/transformers.git@918dbf131d0df5b46e3f6e1d96174d62aa4d16d6",
+    )
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
+live_gateway_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("fastapi[standard]==0.116.1")
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+stage_d_live_cache = modal.Volume.from_name("jump-stage-d-live-cache-v1", create_if_missing=True)
 dispatch_leases = modal.Dict.from_name("jump-experiment-dispatch-lease-v1", create_if_missing=True)
 app = modal.App(APP_NAME)
 
@@ -425,6 +448,237 @@ def authentic_world_stage_c(
         if result.get("status") != "completed":
             raise RunnerError(f"Stage C task failed: {result.get('error')}")
         return result
+
+
+def _authorize_stage_d_launch(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    *,
+    confirm_paid: bool,
+    confirm_h100: bool,
+) -> dict[str, Any]:
+    from jump_benchmark.authentic_stage_d import STAGE_D_MANIFEST_SHA256, stage_d_manifest
+    from jump_mechanistic import STAGE_D_EXECUTION_CONTRACT_SHA256
+
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("Stage D requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != STAGE_D_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage D immutable identity mismatch")
+    execution = stage_d_manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100"
+        or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1
+        or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1
+        or stage_d_manifest()["evaluation"]["execution_contract_sha256"]
+        != STAGE_D_EXECUTION_CONTRACT_SHA256
+        or abs(forecast - execution["retry_aware_forecast_usd"]) > 1e-9
+        or forecast > execution["hard_ceiling_usd"]
+    ):
+        raise RunnerError("Stage D resource/cost contract mismatch")
+    return execution
+
+
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_stage_d_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_d_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
+    """CPU/config-only Gemma and projector preflight; never loads base weights."""
+    from importlib.metadata import version
+    from transformers import AutoConfig, AutoModelForMultimodalLM, AutoTokenizer
+    from jump_benchmark.authentic_stage_d import (
+        BASE_REPO_ID,
+        BASE_REVISION,
+        STAGE_D_MANIFEST_SHA256,
+        TRANSFORMERS_REVISION,
+        assert_prompt_identity,
+        stage_d_cpu_preflight,
+    )
+
+    if expected_manifest_sha256 != STAGE_D_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage D preflight identity mismatch")
+    config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
+    if (
+        config.model_type != "gemma4_unified"
+        or model_class.__name__ != "Gemma4UnifiedForConditionalGeneration"
+    ):
+        raise RunnerError("pinned Gemma config does not resolve through AutoModelForMultimodalLM")
+    tokenizer = AutoTokenizer.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION)
+    result = stage_d_cpu_preflight(tokenizer, hidden_size=int(config.text_config.hidden_size))
+    assert_prompt_identity(tokenizer)
+    return {
+        **result,
+        "code_sha": CODE_VERSION,
+        "base_revision": BASE_REVISION,
+        "transformers_source_revision": TRANSFORMERS_REVISION,
+        "transformers_version": version("transformers"),
+        "model_type": config.model_type,
+        "model_class": model_class.__name__,
+        "weights_loaded": False,
+    }
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=7200,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_stage_d",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_d(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    """Execute the one frozen Stage D projector/control pilot canonically."""
+    from jump_benchmark.authentic_stage_d import STAGE_D_MANIFEST_SHA256
+
+    _authorize_stage_d_launch(
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    root = VOLUME_PATH / "authentic-world-stage-d" / STAGE_D_MANIFEST_SHA256 / "run"
+    phase = {
+        "id": "stage-d", "_secret_keys": ["HF_TOKEN"],
+        "_preregistration": {"layer_allowlist": [0], "timepoint_allowlist": ["answer"]},
+    }
+    run = {
+        "id": "authentic-world-stage-d",
+        "task": {"module": "jump_benchmark.stage_d_task", "parameters": {"expected_manifest_sha256": expected_manifest_sha256, "expected_code_sha": expected_code_sha}},
+        "resources": {"gpu": "H100", "timeout_seconds": 7200},
+        "selection": {"layers": [], "timepoints": []}, "retry": {"max_attempts": 1},
+    }
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256)
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"Stage D task failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-stage-d")
+def submit_stage_d(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> None:
+    """Authorize once, spawn once, and fsync the call identity before exit."""
+    execution = _authorize_stage_d_launch(
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    call = authentic_world_stage_d.spawn(
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=True,
+        confirm_h100=True,
+    )
+    record = {
+        "app_name": APP_NAME,
+        "function": "authentic_world_stage_d",
+        "call_id": call.object_id,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "retry_aware_forecast_usd": execution["retry_aware_forecast_usd"],
+        "hard_ceiling_usd": execution["hard_ceiling_usd"],
+    }
+    registry = Path(".jump/submissions")
+    registry.mkdir(parents=True, exist_ok=True)
+    record_path = registry / f"{call.object_id}.json"
+    with record_path.open("x") as handle:
+        handle.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(registry, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    print(json.dumps({**record, "record_path": str(record_path)}, sort_keys=True))
+
+
+@app.function(
+    image=live_gateway_image,
+    timeout=900,
+    max_containers=1,
+    secrets=[
+        modal.Secret.from_name("jump-authentic-live-auth", required_keys=["JUMP_MODAL_TOKEN"]),
+    ],
+    name="authentic_stage_d_live",
+)
+@modal.concurrent(max_inputs=1)
+@modal.asgi_app()
+def authentic_stage_d_live():
+    """CPU-only authenticated gateway; unauthenticated traffic cannot allocate GPU."""
+    from jump_runner.stage_d_live import build_live_gateway
+
+    async def run_compute(body: dict[str, Any]) -> dict[str, Any]:
+        return await authentic_stage_d_live_compute.remote.aio(body)
+
+    return build_live_gateway(run_compute)
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=900,
+    max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_stage_d_live_compute",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_stage_d_live_compute(body: dict[str, Any]) -> dict[str, Any]:
+    from jump_runner.stage_d_live import live_compute
+
+    return live_compute(body, cache_root=Path("/hf-cache"), commit_cache=stage_d_live_cache.commit)
+
+
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
+    name="authentic_stage_d_live_http_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_stage_d_live_http_preflight() -> dict[str, Any]:
+    from jump_runner.stage_d_live import http_boundary_preflight
+
+    return http_boundary_preflight(Path("/hf-cache"), stage_d_live_cache.commit)
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=900,
+    max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_stage_d_injection_diagnostic",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_stage_d_injection_diagnostic() -> dict[str, Any]:
+    from jump_runner.stage_d_live import injection_sensitivity_diagnostic
+
+    return injection_sensitivity_diagnostic(Path("/hf-cache"), stage_d_live_cache.commit)
 
 
 @app.local_entrypoint(name="submit-stage-c")

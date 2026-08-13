@@ -218,13 +218,18 @@ def matched_world_pair(*, pair_seed: int, config: SimulatorConfig = SimulatorCon
         raise RuntimeError("matched pair visible prefix differs")
     if a["observations"][-1]["positions"] == b["observations"][-1]["positions"]:
         raise RuntimeError("matched pair has coincident consequence")
+    record_a, record_b = _record(a, "swap"), _record(b, "swap")
+    # Scoring targets remain sealed from encoder inputs and are exposed only
+    # after both worlds have been generated for exact Stage D evaluation.
+    record_a["scoring_target"] = a["target"]
+    record_b["scoring_target"] = b["target"]
     return {
         "schema_version": "jump.track-h-matched-world-pair/v1",
         "pair_id": hashlib.sha256(f"authentic-pair:{pair_seed}".encode()).hexdigest()[:20],
         "visible_prefix_frames": 1,
         "candidate_laws": [list(item) for item in LAW_FAMILIES],
-        "a": _record(a, "swap"),
-        "b": _record(b, "swap"),
+        "a": record_a,
+        "b": record_b,
     }
 
 
@@ -352,11 +357,19 @@ def module_content_sha256(module: Any) -> str:
     digest = hashlib.sha256()
     for name, parameter in sorted(module.state_dict().items()):
         value = parameter.detach().to(device="cpu").contiguous()
+        # NumPy has no bfloat16 dtype. Preserve those parameter bytes exactly
+        # rather than converting the deployed projector/gate to float32.
+        if value.dtype == __import__("torch").bfloat16:
+            raw_value = value.view(__import__("torch").uint16)
+            dtype_name = "torch.bfloat16"
+        else:
+            raw_value = value
+            dtype_name = str(value.numpy().dtype)
         header = json.dumps(
-            {"name": name, "dtype": str(value.numpy().dtype), "shape": list(value.shape)},
+            {"name": name, "dtype": dtype_name, "shape": list(value.shape)},
             sort_keys=True, separators=(",", ":"),
         ).encode()
-        digest.update(header + b"\0" + value.numpy().tobytes(order="C"))
+        digest.update(header + b"\0" + raw_value.numpy().tobytes(order="C"))
     return digest.hexdigest()
 
 

@@ -773,18 +773,6 @@
       ]
     }
   },
-  "checkpoint_gate_inputs": {
-    "checkpoint-primary": {
-      "g3_passed": true,
-      "g5_passed": true,
-      "provenance_hash_match_rate": 1.0
-    },
-    "checkpoint-replication": {
-      "g3_passed": true,
-      "g5_passed": true,
-      "provenance_hash_match_rate": 1.0
-    }
-  },
   "checkpoint_identities": {
     "checkpoint-primary": {
       "checkpoint_id": "checkpoint-primary",
