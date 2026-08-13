@@ -41,6 +41,22 @@ def test_controller_is_globally_single_container(monkeypatch):
     assert "@modal.concurrent(max_inputs=1)\ndef orchestrate" in source
     assert '"max_containers": 1' in source
     assert "execute = modal.concurrent(max_inputs=1)(execute)" in source
+    from jump_benchmark.authentic_stage_c import (
+        STAGE_C_MANIFEST_SHA256,
+        authorize_stage_c_launch,
+    )
+
+    authorization = {
+        "expected_manifest_sha256": STAGE_C_MANIFEST_SHA256,
+        "expected_code_sha": "0" * 40,
+        "actual_code_sha": "0" * 40,
+    }
+    with pytest.raises(PermissionError, match="literal confirm_paid"):
+        authorize_stage_c_launch(**authorization, confirm_paid=False, confirm_h100=True)
+    with pytest.raises(PermissionError, match="literal confirm_paid"):
+        authorize_stage_c_launch(**authorization, confirm_paid=True, confirm_h100=False)
+    authorize_stage_c_launch(**authorization, confirm_paid=True, confirm_h100=True)
+    assert source.count("authorize_stage_c_launch(") == 2  # local and remote seams
 
 
 def test_direct_worker_call_repeats_smoke_authorization(monkeypatch, manifest, tmp_path):

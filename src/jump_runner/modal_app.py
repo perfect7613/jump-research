@@ -276,69 +276,62 @@ def get_status(manifest: dict[str, Any], smoke: bool = False) -> dict[str, Any]:
 def authentic_world_stage_c(
     expected_manifest_sha256: str,
     expected_code_sha: str,
-    experiment_spec: dict[str, Any],
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
 ) -> dict[str, Any]:
     """Run the frozen three-seed predictive-world pilot in one serial call."""
     from jump_benchmark.authentic_stage_c import (
         STAGE_C_MANIFEST_SHA256,
-        run_stage_c,
-        stage_c_manifest,
+        authorize_stage_c_launch,
+        stage_c_run_contract,
     )
-    from jump_benchmark.experiment_spec import validate_experiment_spec
-
-    manifest = stage_c_manifest()
-    execution = manifest["execution"]
-    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
-        raise RunnerError("Stage C manifest hash mismatch")
-    if expected_code_sha != CODE_VERSION:
-        raise RunnerError("Stage C code revision mismatch")
-    if (
-        execution["resource"] != "H100"
-        or execution["gpu_count"] != 1
-        or execution["max_containers"] != 1
-        or execution["max_inputs"] != 1
-        or execution["max_attempts"] != 1
-        or execution["retry_aware_forecast_usd"] > execution["hard_ceiling_usd"]
-    ):
-        raise RunnerError("Stage C resource or spend contract is invalid")
-    plan = validate_experiment_spec(experiment_spec)
-    output_root = VOLUME_PATH / "authentic-world-stage-c" / STAGE_C_MANIFEST_SHA256 / "output"
-    checkpoint_root = VOLUME_PATH / "authentic-world-stage-c" / STAGE_C_MANIFEST_SHA256 / "checkpoints"
-    if output_root.exists():
-        raise RunnerError("immutable Stage C output root already exists")
+    authorize_stage_c_launch(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        actual_code_sha=CODE_VERSION,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    run_root_path = VOLUME_PATH / "authentic-world-stage-c" / STAGE_C_MANIFEST_SHA256 / "run"
+    phase, run = stage_c_run_contract(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+    )
     with _dispatch_lease(dispatch_leases):
-        result = run_stage_c(
-            output_root=output_root,
-            checkpoint_root=checkpoint_root,
-            expected_manifest_sha256=expected_manifest_sha256,
-            expected_code_sha=expected_code_sha,
-            experiment_spec=plan,
-            device="cuda",
-            checkpoint_commit=volume.commit,
+        result = execute_local_run(
+            phase,
+            run,
+            run_root_path,
+            expected_manifest_sha256,
         )
         volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"Stage C task failed: {result.get('error')}")
         return result
 
 
 @app.local_entrypoint(name="submit-stage-c")
 def submit_stage_c(
-    experiment_spec_path: str,
     expected_manifest_sha256: str,
     expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
 ) -> None:
     """Validate locally, spawn exactly once, and persist the call ID before exit."""
-    from jump_benchmark.authentic_stage_c import STAGE_C_MANIFEST_SHA256
-    from jump_benchmark.experiment_spec import validate_experiment_spec
+    from jump_benchmark.authentic_stage_c import authorize_stage_c_launch
 
-    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
-        raise RunnerError("Stage C manifest hash mismatch before dispatch")
-    if expected_code_sha != CODE_VERSION:
-        raise RunnerError("Stage C code revision mismatch before dispatch")
-    plan = validate_experiment_spec(json.loads(Path(experiment_spec_path).read_text()))
+    plan = authorize_stage_c_launch(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        actual_code_sha=CODE_VERSION,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
     call = authentic_world_stage_c.spawn(
         expected_manifest_sha256,
         expected_code_sha,
-        plan,
+        confirm_paid=True,
+        confirm_h100=True,
     )
     record = {
         "app_name": APP_NAME,
