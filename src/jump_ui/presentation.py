@@ -75,7 +75,7 @@ def result_sections(run: dict[str, Any], *, backend_label: str) -> tuple[str, st
         '<section class="result-card evidence-card"><p class="step-number">05</p><h2>Evidence</h2>'
         '<p>The same learned world state was used for the model input and the picture. '
         'The sealed answer and image bytes passed their checks.</p>'
-        '<p class="quiet">This verifies engineering provenance only. Stage D was null: '
+        '<p class="quiet">This verifies engineering provenance only. Stage D null: '
         'own-z equaled no-z and the donor shift was zero.</p></section>'
     )
     return world, prediction, changed, correct, evidence
