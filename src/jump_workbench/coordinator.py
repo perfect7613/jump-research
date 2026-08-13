@@ -7,7 +7,10 @@ from typing import Any, Callable, MutableMapping
 
 from jump_contracts.experiments import comparison_records, validate_experiment_plan, validate_experiment_run
 
-from .workflow import FrozenModel, WorkbenchError, confirm_and_predict, finalize_run, prepare_plan
+from .workflow import (
+    FrozenModel, WorkbenchError, confirm_and_predict, finalize_run, prepare_plan,
+    validate_user_intent,
+)
 
 PLAN_RESPONSE_VERSION = "jump.experiment-plan-response/v1"
 CONFIRMATION_VERSION = "jump.experiment-confirmation/v1"
@@ -171,7 +174,16 @@ def _validate_question(value: Any) -> dict[str, Any]:
     for key in ("request_id", "session_id"):
         if not isinstance(value[key], str) or not value[key] or len(value[key]) > 128:
             raise CoordinatorError(f"{key} must be bounded nonempty text")
-    return dict(value)
+    try:
+        value = dict(value)
+        value["intent"] = validate_user_intent(value["intent"])
+    except WorkbenchError as exc:
+        raise CoordinatorError(str(exc)) from exc
+    if not isinstance(value["seed"], int) or isinstance(value["seed"], bool) or not 0 <= value["seed"] <= 2_147_483_647:
+        raise CoordinatorError("seed must be an integer from 0 through 2147483647")
+    if not isinstance(value["repetitions"], int) or isinstance(value["repetitions"], bool) or not 1 <= value["repetitions"] <= 100:
+        raise CoordinatorError("repetitions must be an integer from 1 through 100")
+    return value
 
 
 def _validate_confirmation(value: Any) -> dict[str, Any]:

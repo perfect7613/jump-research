@@ -98,6 +98,8 @@ def test_question_ingress_rejects_source_before_model_call():
     coordinator = _coordinator(events)
     with pytest.raises(CoordinatorError, match="exactly"):
         coordinator.plan(_question(source="def simulate(plan): pass"))
+    with pytest.raises(CoordinatorError, match="URLs"):
+        coordinator.plan(_question(intent="Download clinical data from https://example.com"))
     assert events == []
 
 
