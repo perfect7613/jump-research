@@ -14,7 +14,7 @@ import modal
 
 from .errors import RunnerError
 from .executor import execute_local_run, read_status, run_manifest, run_root
-from .manifest import authorize_launch, manifest_hash, resolve_run
+from .manifest import authorize_launch, manifest_hash, resolve_run, validate_json_schema
 
 APP_NAME = os.environ.get("JUMP_MODAL_APP_NAME", "jump-sequential-experiments")
 VOLUME_NAME = os.environ.get("JUMP_MODAL_VOLUME_NAME", "jump-experiment-runs-v1")
@@ -43,7 +43,12 @@ image = (
 )
 track_h_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("numpy==2.3.2", "safetensors==0.8.0", "torch==2.11.0")
+    .pip_install(
+        "jsonschema==4.26.0",
+        "numpy==2.3.2",
+        "safetensors==0.8.0",
+        "torch==2.11.0",
+    )
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
@@ -264,6 +269,59 @@ def get_status(manifest: dict[str, Any], smoke: bool = False) -> dict[str, Any]:
     return read_status(manifest, VOLUME_PATH, smoke=smoke)
 
 
+def _validate_track_h_runtime() -> dict[str, Any]:
+    """Validate the exact Stage C image dependency before any evidence root write."""
+    from importlib.metadata import version
+
+    jsonschema_version = version("jsonschema")
+    if jsonschema_version != "4.26.0":
+        raise RuntimeError("Stage C image requires jsonschema==4.26.0")
+    validate_json_schema(
+        {
+            "schema_version": "jump.run-result/v1",
+            "status": "completed",
+            "attempt": 1,
+            "metrics": [],
+            "artifacts": [],
+            "provenance": {
+                "manifest_sha256": "0" * 64,
+                "run_id": "stage-c-image-preflight",
+                "code_version": CODE_VERSION,
+            },
+        },
+        "run-result-v1.schema.json",
+    )
+    return {
+        "status": "passed",
+        "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+        "jsonschema_version": jsonschema_version,
+        "code_sha": CODE_VERSION,
+        "gpu_allocated": False,
+        "evidence_root_created": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
+    timeout=60,
+    max_containers=1,
+    name="authentic_world_stage_c_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_c_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """CPU-only dependency/schema preflight; this function cannot allocate a GPU."""
+    from jump_benchmark.authentic_stage_c import STAGE_C_MANIFEST_SHA256
+
+    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
+        raise RunnerError("Stage C preflight manifest hash mismatch")
+    if expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage C preflight code revision mismatch")
+    return {**_validate_track_h_runtime(), "manifest_sha256": STAGE_C_MANIFEST_SHA256}
+
+
 @app.function(
     image=track_h_image,
     gpu="H100",
@@ -285,6 +343,7 @@ def authentic_world_stage_c(
         authorize_stage_c_launch,
         stage_c_run_contract,
     )
+    _validate_track_h_runtime()
     authorize_stage_c_launch(
         expected_manifest_sha256=expected_manifest_sha256,
         expected_code_sha=expected_code_sha,

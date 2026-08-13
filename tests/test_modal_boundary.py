@@ -57,6 +57,9 @@ def test_controller_is_globally_single_container(monkeypatch):
         authorize_stage_c_launch(**authorization, confirm_paid=True, confirm_h100=False)
     authorize_stage_c_launch(**authorization, confirm_paid=True, confirm_h100=True)
     assert source.count("authorize_stage_c_launch(") == 2  # local and remote seams
+    runtime = modal_app._validate_track_h_runtime()
+    assert runtime["jsonschema_version"] == "4.26.0"
+    assert runtime["gpu_allocated"] is False
 
 
 def test_direct_worker_call_repeats_smoke_authorization(monkeypatch, manifest, tmp_path):

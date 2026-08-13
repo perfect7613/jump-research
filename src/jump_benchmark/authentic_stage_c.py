@@ -158,6 +158,17 @@ def stage_c_manifest() -> dict[str, Any]:
             "three-seed predictive learned-latent engineering pilot; post-hoc probes are "
             "descriptive and do not establish causal or mechanistic evidence"
         ),
+        "execution_lineage": {
+            "state": "recovery",
+            "recovery_of": {
+                "prior_manifest_sha256": "5751282585b711a16fc844b5e03727bd3547327a116bdd5f893375a0fb0e1dc5",
+                "failed_call_ids": ["fc-01KZX71R5MWG5MMPWTFD1XTQZQ"],
+                "partial_inventory_sha256": "f896b888e94491921a080ed61cc682e52523ac79f195bfe6a5d78ece7f83baf2",
+                "failure_reason": "track_h_image omitted jsonschema before canonical run-result validation",
+                "source_outputs_reused": False,
+                "source_root_mutated": False,
+            },
+        },
         "launch_spec": {
             "policy": "exact_canonical_training_spec_only",
             "sha256": STAGE_C_LAUNCH_SPEC_SHA256,
@@ -297,6 +308,7 @@ def stage_c_manifest() -> dict[str, Any]:
             "serial": True,
             "code_sha_required_and_verified_against_git_head": True,
             "dependency_lock": {
+                "jsonschema": "4.26.0",
                 "numpy": "2.3.2",
                 "safetensors": "0.8.0",
                 "torch": "2.11.0",
