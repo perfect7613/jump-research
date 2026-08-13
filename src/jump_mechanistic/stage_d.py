@@ -29,6 +29,7 @@ from .scoring import score_episode
 
 STAGE_D_CONTROL_VERSION = "jump.track-h-stage-d-control/v1"
 LATENT_PERMUTATION_VERSION = "jump.latent-byte-permutation/v1"
+STAGE_D_EXECUTION_CONTRACT_VERSION = "jump.track-h-stage-d-execution-contract/v2"
 STAGE_D_ARMS = (
     "own_z",
     "no_z",
@@ -38,13 +39,36 @@ STAGE_D_ARMS = (
     "swap_b_to_a",
 )
 STAGE_D_EXECUTION_CONTRACT = {
-    "schema_version": "jump.track-h-stage-d-execution-contract/v1",
+    "schema_version": STAGE_D_EXECUTION_CONTRACT_VERSION,
     "arms": list(STAGE_D_ARMS),
     "model_execution": "external_producer_only",
-    "forward_mode": "teacher_forced_single_forward",
+    "forward_mode": "deterministic_constrained_autoregressive_generation",
+    "latent_injection": {
+        "representation": "nontextual_learned_latent",
+        "persistence": "every_generation_step",
+        "text_serialization": "forbidden",
+    },
+    "conditioning": {
+        "teacher_forcing": False,
+        "target_prefix": "forbidden",
+        "answer_prefix": "forbidden",
+    },
+    "decoding": {
+        "strategy": "greedy_argmax",
+        "do_sample": False,
+        "num_beams": 1,
+        "max_new_tokens": 128,
+        "stop_condition": "grammar_complete",
+    },
+    "grammar": {
+        "schema_version": "jump.track-h-exact-answer-grammar/v1",
+        "serialization": "canonical_json",
+        "required_fields": ["partition", "replacement_law", "adequate"],
+        "additional_fields": False,
+    },
     "answer": "exact_parsed_answer_only",
+    "parse_failure": "reject_arm",
     "outcome_source": "sealed_answer_scored_by_locked_exact_scorer",
-    "no_generation": True,
 }
 STAGE_D_EXECUTION_CONTRACT_SHA256 = hashlib.sha256(
     canonical_json(STAGE_D_EXECUTION_CONTRACT)

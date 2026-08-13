@@ -17,6 +17,8 @@ from jump_mechanistic.stage_d import (
     LATENT_PERMUTATION_VERSION,
     STAGE_D_ARMS,
     STAGE_D_CONTROL_VERSION,
+    STAGE_D_EXECUTION_CONTRACT,
+    STAGE_D_EXECUTION_CONTRACT_VERSION,
     StageDArmInput,
     StageDControlSpec,
     build_stage_d_control_result,
@@ -208,6 +210,36 @@ def test_exact_six_arm_matrix_uses_shared_envelopes_and_derived_scores():
         "execution_contract_sha256",
         "injection",
     }
+
+
+def test_v2_execution_contract_requires_nonleaky_persistent_generation():
+    contract = STAGE_D_EXECUTION_CONTRACT
+    assert contract["schema_version"] == STAGE_D_EXECUTION_CONTRACT_VERSION
+    assert contract["forward_mode"] == "deterministic_constrained_autoregressive_generation"
+    assert contract["latent_injection"] == {
+        "representation": "nontextual_learned_latent",
+        "persistence": "every_generation_step",
+        "text_serialization": "forbidden",
+    }
+    assert contract["conditioning"] == {
+        "teacher_forcing": False,
+        "target_prefix": "forbidden",
+        "answer_prefix": "forbidden",
+    }
+    assert contract["decoding"] == {
+        "strategy": "greedy_argmax",
+        "do_sample": False,
+        "num_beams": 1,
+        "max_new_tokens": 128,
+        "stop_condition": "grammar_complete",
+    }
+    assert contract["grammar"] == {
+        "schema_version": "jump.track-h-exact-answer-grammar/v1",
+        "serialization": "canonical_json",
+        "required_fields": ["partition", "replacement_law", "adequate"],
+        "additional_fields": False,
+    }
+    assert contract["parse_failure"] == "reject_arm"
 
 
 def test_scrambled_arm_is_float32_element_permutation_and_tampering_fails():
