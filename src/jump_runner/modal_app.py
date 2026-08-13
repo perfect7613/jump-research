@@ -74,7 +74,12 @@ stage_d_image = (
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
-live_gateway_image = image.pip_install("fastapi[standard]==0.116.1")
+live_gateway_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("fastapi[standard]==0.116.1")
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 stage_d_live_cache = modal.Volume.from_name("jump-stage-d-live-cache-v1", create_if_missing=True)
 dispatch_leases = modal.Dict.from_name("jump-experiment-dispatch-lease-v1", create_if_missing=True)
