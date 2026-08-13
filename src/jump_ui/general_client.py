@@ -49,7 +49,7 @@ class GeneralCoordinatorClient:
             raise GeneralCoordinatorError("The plan response state is invalid.")
         if payload["request_id"] != request["request_id"] or payload["session_id"] != request["session_id"]:
             raise GeneralCoordinatorError("The plan response does not bind the request.")
-        payload["plan"] = validate_experiment_plan(payload["plan"])
+        payload["plan"] = _validated_plan(payload["plan"])
         _validate_model(payload["model"])
         _validate_confirmation(payload["confirmation"], payload["plan"], confirmed=False)
         return payload
@@ -57,7 +57,7 @@ class GeneralCoordinatorClient:
     def confirm(self, planned: Mapping[str, Any]) -> dict[str, Any]:
         if planned.get("schema_version") != PLAN_RESPONSE_VERSION or planned.get("status") != "awaiting_confirmation":
             raise GeneralCoordinatorError("Only an awaiting-confirmation plan can run.")
-        plan = validate_experiment_plan(planned.get("plan", {}))
+        plan = _validated_plan(planned.get("plan", {}))
         _validate_model(planned.get("model"))
         confirmation = dict(planned.get("confirmation", {}))
         _validate_confirmation(confirmation, plan, confirmed=False)
@@ -69,13 +69,16 @@ class GeneralCoordinatorClient:
             raise GeneralCoordinatorError("The run response state is invalid.")
         if payload["request_id"] != planned["request_id"] or payload["session_id"] != planned["session_id"]:
             raise GeneralCoordinatorError("The run response does not bind the request.")
-        returned_plan = validate_experiment_plan(payload["plan"])
+        returned_plan = _validated_plan(payload["plan"])
         if returned_plan != plan:
             raise GeneralCoordinatorError("The run response changed the confirmed plan.")
         if payload["model"] != planned["model"]:
             raise GeneralCoordinatorError("The run response changed the frozen model identity.")
         _validate_model(payload["model"])
-        payload["run"] = validate_run_response(payload["run"], returned_plan)
+        try:
+            payload["run"] = validate_run_response(payload["run"], returned_plan)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GeneralCoordinatorError(f"The run response failed direct validation: {exc}") from exc
         return payload
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +162,13 @@ def _validate_model(value: Any) -> None:
         raise GeneralCoordinatorError("The frozen model identity is incomplete.")
     if value["frozen"] is not True or value["adapter_id"] is not None:
         raise GeneralCoordinatorError("The coordinator must use a frozen base model without an adapter.")
+
+
+def _validated_plan(value: Any) -> dict[str, Any]:
+    try:
+        return validate_experiment_plan(value)
+    except (TypeError, ValueError) as exc:
+        raise GeneralCoordinatorError(f"The plan response failed direct validation: {exc}") from exc
 
 
 def _validate_confirmation(value: Any, plan: Mapping[str, Any], *, confirmed: bool) -> None:

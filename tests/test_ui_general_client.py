@@ -109,6 +109,15 @@ def test_client_rejects_question_extras_before_transport(monkeypatch):
         GeneralCoordinatorClient("https://coordinator.invalid", "secret").plan(request)
 
 
+@pytest.mark.parametrize("field", ("source", "code", "url"))
+def test_client_rejects_response_aliases_and_unsafe_extras(monkeypatch, field):
+    plan_response, _ = responses_for(EXAMPLES[1])
+    plan_response[field] = "not accepted"
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response(plan_response))
+    with pytest.raises(GeneralCoordinatorError, match="unexpected fields"):
+        GeneralCoordinatorClient("https://coordinator.invalid", "secret").plan(question(EXAMPLES[1]))
+
+
 def test_client_has_no_unconfigured_fallback(monkeypatch):
     monkeypatch.delenv("JUMP_GENERAL_COORDINATOR_URL", raising=False)
     monkeypatch.delenv("JUMP_MODAL_TOKEN", raising=False)
