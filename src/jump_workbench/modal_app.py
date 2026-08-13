@@ -30,7 +30,11 @@ def _code_version() -> str:
 
 
 CODE_VERSION = _code_version()
-simulator_image = modal.Image.debian_slim(python_version="3.11").add_local_dir("src", remote_path="/opt/jump/src")
+simulator_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
 gateway_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("fastapi[standard]==0.116.1", "jsonschema==4.26.0")
@@ -153,7 +157,7 @@ def general_coordinator_compute(action: str, body: dict[str, Any]) -> dict[str, 
     ) -> dict[str, Any]:
         started_at = datetime.now(timezone.utc)
         call = execute_restricted_simulation.spawn(plan, source, confirmation, prediction)
-        result = call.get(timeout=35)
+        result = call.get(timeout=90)
         return {
             "modal_call_id": call.object_id,
             "started_at": started_at,
