@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from jump_contracts.evidence import load_verified_run_evidence, read_verified_artifact
 from jump_runner.executor import run_manifest, run_root
 from jump_runner.manifest import manifest_hash
 
@@ -26,6 +27,17 @@ def test_smoke_writes_immutable_evidence_and_skips_completed(manifest, tmp_path)
     result = json.loads(result_before)
     assert result["provenance"]["manifest_sha256"] == manifest_hash(manifest)
     assert result["artifacts"][0]["sha256"]
+    assert result["artifacts"][0]["media_type"] == "text/plain"
+    assert result["artifacts"][0]["role"] == "protocol-smoke"
+    assert load_verified_run_evidence(
+        run_dir / "result.json", expected_manifest_sha256=manifest_hash(manifest)
+    ) == result
+    _, artifact_bytes = read_verified_artifact(
+        run_dir / "result.json",
+        "protocol-smoke-evidence",
+        expected_manifest_sha256=manifest_hash(manifest),
+    )
+    assert artifact_bytes == b"deterministic CPU smoke artifact\n"
     assert (attempts_before[0] / "stdout.log").exists()
     assert (attempts_before[0] / "stderr.log").exists()
     assert (attempts_before[0] / "hashes.sha256").exists()
@@ -150,3 +162,39 @@ def test_result_layer_is_revalidated(manifest, tmp_path):
     result = run_manifest(manifest, tmp_path, smoke=True)
     assert result["status"] == "stopped"
     assert result["stopped_reason"].startswith("run pilot-1 failed")
+
+
+def test_domain_recovery_lineage_survives_immutable_promotion(manifest, tmp_path):
+    lineage = {
+        "state": "recovery",
+        "recovery_of": {
+            "prior_manifest_sha256": "1" * 64,
+            "partial_inventory_sha256": "2" * 64,
+            "failed_call_ids": ["fc-failed-once"],
+            "source_outputs_reused": False,
+            "source_root_mutated": False,
+        },
+        "call_audit": [
+            {"call_id": "fc-failed-once", "disposition": "failed_partial"},
+            {"call_id": "fc-recovery-once", "disposition": "recovery"},
+            {"call_id": "fc-duplicate", "disposition": "duplicate_rejected"},
+        ],
+    }
+    bindings = {
+        "source_dataset_sha256": "3" * 64,
+        "tokenized_dataset_sha256": "4" * 64,
+    }
+    manifest["phases"][0]["runs"][0]["task"]["parameters"]["evidence_fields"] = {
+        "input_bindings": bindings,
+        "execution_lineage": lineage,
+    }
+
+    status = run_manifest(manifest, tmp_path, smoke=True)
+    assert status["status"] == "completed"
+    run_dir = run_root(tmp_path, manifest, "smoke") / "phases/pilot/runs/pilot-1"
+    result = json.loads((run_dir / "result.json").read_text())
+    assert result["input_bindings"] == bindings
+    assert result["execution_lineage"] == lineage
+    before = (run_dir / "result.json").read_bytes()
+    assert run_manifest(manifest, tmp_path, smoke=True)["status"] == "completed"
+    assert (run_dir / "result.json").read_bytes() == before
