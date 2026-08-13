@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from jump_workbench.coordinator import CoordinatorError, GeneralCoordinator
+from jump_workbench.gateway import build_general_gateway
 from jump_workbench.gemma_planner import BASE_REPO_ID, BASE_REVISION, TRANSFORMERS_REVISION
 from jump_workbench.workflow import FrozenModel
 
@@ -126,3 +127,19 @@ def test_confirmation_must_match_the_human_visible_plan():
     confirmation = {**response["confirmation"], "confirmed": True, "plan_sha256": "0" * 64}
     with pytest.raises(CoordinatorError, match="does not match"):
         coordinator.confirm(confirmation)
+
+
+def test_http_gateway_rejects_unauthenticated_requests_before_action(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    called = []
+
+    async def action(_name, _body):
+        called.append(True)
+        return {}
+
+    monkeypatch.delenv("JUMP_MODAL_TOKEN", raising=False)
+    app = build_general_gateway(action, health={"status": "available"})
+    response = TestClient(app).post("/v1/experiments/plan", json=_question())
+    assert response.status_code == 401
+    assert called == []

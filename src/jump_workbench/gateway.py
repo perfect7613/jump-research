@@ -1,7 +1,5 @@
 """Authenticated HTTP boundary for the general workbench coordinator."""
 
-from __future__ import annotations
-
 import hmac
 import os
 from typing import Any, Awaitable, Callable
