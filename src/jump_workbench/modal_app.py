@@ -32,6 +32,7 @@ def _code_version() -> str:
 CODE_VERSION = _code_version()
 simulator_image = (
     modal.Image.debian_slim(python_version="3.11")
+    .pip_install("jsonschema==4.26.0")
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
