@@ -11,7 +11,6 @@ import math
 import os
 import platform
 import random
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -161,10 +160,13 @@ def stage_c_manifest() -> dict[str, Any]:
         "execution_lineage": {
             "state": "recovery",
             "recovery_of": {
-                "prior_manifest_sha256": "5751282585b711a16fc844b5e03727bd3547327a116bdd5f893375a0fb0e1dc5",
-                "failed_call_ids": ["fc-01KZX71R5MWG5MMPWTFD1XTQZQ"],
+                "prior_manifest_sha256": "a9cf6370d9bed04ecf3c3af8ec20948e8fa1748624f08d1c0d9992ccfbab63fd",
+                "failed_call_ids": [
+                    "fc-01KZX71R5MWG5MMPWTFD1XTQZQ",
+                    "fc-01KZX8FV6W0EFNWA0E3GGMZ8YM",
+                ],
                 "partial_inventory_sha256": "f896b888e94491921a080ed61cc682e52523ac79f195bfe6a5d78ece7f83baf2",
-                "failure_reason": "track_h_image omitted jsonschema before canonical run-result validation",
+                "failure_reason": "Stage C task subprocess omitted JUMP_CODE_VERSION and attempted unavailable git fallback",
                 "source_outputs_reused": False,
                 "source_root_mutated": False,
             },
@@ -1202,14 +1204,9 @@ def run_stage_c(
     if output_root.exists():
         if not precreated_empty_output_root or any(output_root.iterdir()):
             raise FileExistsError("immutable Stage C aggregate output root already exists")
-    if not dry_run:
-        actual_code_sha = os.environ.get("JUMP_CODE_VERSION")
-        if actual_code_sha is None:
-            actual_code_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True
-            ).strip()
-        if actual_code_sha != expected_code_sha:
-            raise RuntimeError("running code revision differs from expected_code_sha")
+    actual_code_sha = os.environ.get("JUMP_CODE_VERSION")
+    if not dry_run and actual_code_sha != expected_code_sha:
+        raise RuntimeError("deployed Stage C requires explicit matching JUMP_CODE_VERSION")
     manifest = stage_c_manifest()
     seeds = manifest["initialization"]["seeds"]
     if len(seeds) != 3 or len({item["parameter_seed"] for item in seeds}) != 3 or len(

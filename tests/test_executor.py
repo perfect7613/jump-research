@@ -223,3 +223,15 @@ def test_domain_recovery_lineage_survives_immutable_promotion(manifest, tmp_path
     before = (run_dir / "result.json").read_bytes()
     assert run_manifest(manifest, tmp_path, smoke=True)["status"] == "completed"
     assert (run_dir / "result.json").read_bytes() == before
+
+
+def test_executor_propagates_explicit_code_version(monkeypatch, manifest, tmp_path):
+    monkeypatch.setenv("JUMP_CODE_VERSION", "a" * 40)
+    manifest["phases"][0]["runs"][0]["task"]["parameters"]["echo_env"] = [
+        "JUMP_CODE_VERSION"
+    ]
+    result = run_manifest(manifest, tmp_path, smoke=True)
+    assert result["status"] == "completed"
+    run_dir = run_root(tmp_path, manifest, "smoke") / "phases/pilot/runs/pilot-1"
+    stdout = (run_dir / "attempts/0001/stdout.log").read_text()
+    assert "a" * 40 in stdout

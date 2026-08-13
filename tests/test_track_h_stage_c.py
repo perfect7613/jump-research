@@ -24,7 +24,7 @@ def _plan():
 
 def test_stage_c_manifest_probe_and_persistence_contract_is_frozen():
     manifest = stage_c_manifest()
-    assert STAGE_C_MANIFEST_SHA256 == "a9cf6370d9bed04ecf3c3af8ec20948e8fa1748624f08d1c0d9992ccfbab63fd"
+    assert STAGE_C_MANIFEST_SHA256 == "a90890d8ff4f154a6e1bdaca4af4dda00371754d2e5cc9ad203fadad2a24c84a"
     assert [item["seed_id"] for item in manifest["initialization"]["seeds"]] == [
         "seed-99173", "seed-99174", "seed-99175"
     ]
