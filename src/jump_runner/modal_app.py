@@ -52,6 +52,7 @@ track_h_image = (
     .pip_install(
         "jsonschema==4.26.0",
         "numpy==2.3.2",
+        "Pillow==11.3.0",
         "safetensors==0.8.0",
         "torch==2.11.0",
     )
@@ -448,6 +449,460 @@ def authentic_world_stage_c(
         if result.get("status") != "completed":
             raise RunnerError(f"Stage C task failed: {result.get('error')}")
         return result
+
+
+def _authorize_long_horizon_launch(
+    *,
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool,
+    confirm_h100: bool,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon import long_horizon_manifest, manifest_sha256
+
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("long-horizon Phase A requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != manifest_sha256(mode) or expected_code_sha != CODE_VERSION:
+        raise RunnerError("long-horizon immutable identity mismatch")
+    execution = long_horizon_manifest(mode)["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100"
+        or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1
+        or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1
+        or execution["serial"] is not True
+        or abs(forecast - execution["forecast_usd"]) > 1e-9
+        or forecast > execution["aggregate_authority_ceiling_usd"]
+    ):
+        raise RunnerError("long-horizon resource or cost contract mismatch")
+    return execution
+
+
+@app.function(
+    image=track_h_image,
+    timeout=300,
+    max_containers=1,
+    name="authentic_world_long_horizon_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_preflight(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """Exercise the actual task/promotion seam on a tiny CPU workload."""
+    from jump_benchmark.long_horizon import manifest_sha256, run_contract
+
+    _validate_track_h_runtime()
+    if expected_manifest_sha256 != manifest_sha256(mode) or expected_code_sha != CODE_VERSION:
+        raise RunnerError("long-horizon preflight identity mismatch")
+    phase, run = run_contract(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        dry_run=True,
+    )
+    root = Path("/tmp") / "jump-long-horizon-preflight" / uuid.uuid4().hex
+    result = execute_local_run(phase, run, root, expected_manifest_sha256)
+    if result.get("status") != "completed" or result["provenance"]["code_version"] != CODE_VERSION:
+        raise RunnerError("long-horizon canonical CPU preflight failed")
+    return {
+        "status": "passed",
+        "mode": mode,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "schema_version": result["schema_version"],
+        "artifacts_promoted": len(result["artifacts"]),
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
+    gpu="H100",
+    timeout=7200,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    name="authentic_world_long_horizon",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    """Run one frozen Phase-A mode; pilot and replication have distinct roots."""
+    from jump_benchmark.long_horizon import run_contract
+
+    _validate_track_h_runtime()
+    _authorize_long_horizon_launch(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    root = VOLUME_PATH / "authentic-world-long-horizon" / expected_manifest_sha256 / "run"
+    phase, run = run_contract(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+    )
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256)
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"long-horizon task failed: {result.get('error')}")
+        return result
+
+
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_long_horizon_stage_b_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_stage_b_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """CPU/config-only Phase-B preflight; never loads base weights or allocates GPU."""
+    import hashlib
+    from transformers import AutoConfig, AutoModelForMultimodalLM, AutoTokenizer
+    from jump_benchmark.authentic import build_gated_residual_projector
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION, assert_prompt_identity
+    from jump_benchmark.long_horizon import LATENT_DIM, build_long_horizon_modules
+    from jump_benchmark.long_horizon_stage_b import (
+        SOURCE_DECODER_SHA256,
+        SOURCE_ENCODER_SHA256,
+        SOURCE_RELATIVE_ROOT,
+        STAGE_B_MANIFEST_SHA256,
+        _encode,
+        dynamic_32d_control_preflight,
+        matched_pair_cpu_generation_preflight,
+    )
+    from safetensors.torch import load_file
+
+    if expected_manifest_sha256 != STAGE_B_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Phase B preflight identity mismatch")
+    source = VOLUME_PATH / SOURCE_RELATIVE_ROOT
+    encoder_path, decoder_path = source / "encoder.safetensors", source / "decoder.safetensors"
+    if hashlib.sha256(encoder_path.read_bytes()).hexdigest() != SOURCE_ENCODER_SHA256 or hashlib.sha256(decoder_path.read_bytes()).hexdigest() != SOURCE_DECODER_SHA256:
+        raise RunnerError("Phase B preflight source checksum mismatch")
+    encoder, decoder = build_long_horizon_modules()
+    encoder.load_state_dict(load_file(encoder_path), strict=True)
+    decoder.load_state_dict(load_file(decoder_path), strict=True)
+    from jump_benchmark.authentic import matched_world_pair
+    from jump_benchmark.simulator import SimulatorConfig
+    pair = matched_world_pair(pair_seed=33173, config=SimulatorConfig(steps=12))
+    paired_z, paired_observation = _encode(encoder, pair["a"], "cpu")
+    if tuple(paired_z.shape) != (1, LATENT_DIM) or paired_observation.sha256() != pair["a"]["encoder_input_sha256"]:
+        raise RunnerError("Phase B matched-pair observation-only encoder path mismatch")
+    config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
+    tokenizer = AutoTokenizer.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    matched_pair_seam = matched_pair_cpu_generation_preflight(encoder, decoder, tokenizer)
+    prompt = assert_prompt_identity(tokenizer)
+    hidden_size = int(config.text_config.hidden_size)
+    projector = build_gated_residual_projector(hidden_size, latent_dim=LATENT_DIM)
+    if projector.projector.weight.shape != (hidden_size, LATENT_DIM):
+        raise RunnerError("Phase B projector shape mismatch")
+    control_seam = dynamic_32d_control_preflight()
+    import tempfile
+    with tempfile.TemporaryDirectory() as temporary:
+        phase = {
+            "id": "long-horizon-stage-b",
+            "_preregistration": {"layer_allowlist": [0], "timepoint_allowlist": ["answer"]},
+        }
+        run = {
+            "id": "long-horizon-stage-b",
+            "task": {"module": "jump_benchmark.long_horizon_stage_b_task", "parameters": {
+                "expected_manifest_sha256": expected_manifest_sha256,
+                "expected_code_sha": expected_code_sha,
+                "dry_run": True,
+            }},
+            "resources": {"gpu": "cpu", "timeout_seconds": 60},
+            "selection": {"layers": [], "timepoints": []},
+            "retry": {"max_attempts": 1},
+        }
+        dry_result = execute_local_run(
+            phase, run, Path(temporary) / "canonical-preflight-run", expected_manifest_sha256
+        )
+        if dry_result.get("status") != "completed" or len(dry_result.get("artifacts", [])) != 1:
+            raise RunnerError("Phase B canonical executor/artifact promotion preflight failed")
+    return {
+        "status": "passed",
+        "manifest_sha256": STAGE_B_MANIFEST_SHA256,
+        "code_sha": CODE_VERSION,
+        "model_type": config.model_type,
+        "model_class": model_class.__name__,
+        "hidden_size": hidden_size,
+        "latent_dim": LATENT_DIM,
+        "prompt_binding": prompt,
+        "dynamic_32d_six_arm_seam": control_seam,
+        "executor_precreated_empty_work_root": True,
+        "canonical_artifact_promotion": True,
+        "source_encoder_sha256": SOURCE_ENCODER_SHA256,
+        "source_decoder_sha256": SOURCE_DECODER_SHA256,
+        "matched_pair_observation_only_encode": True,
+        "matched_pair_six_arm_generation_and_scoring": matched_pair_seam,
+        "base_weights_loaded": False,
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+    }
+
+
+def _authorize_long_horizon_stage_b(
+    *, expected_manifest_sha256: str, expected_code_sha: str,
+    confirm_paid: bool, confirm_h100: bool,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon_stage_b import STAGE_B_MANIFEST_SHA256, stage_b_manifest
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("Phase B requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != STAGE_B_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Phase B immutable identity mismatch")
+    execution = stage_b_manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if forecast != execution["forecast_usd"] or forecast > execution["aggregate_authority_ceiling_usd"]:
+        raise RunnerError("Phase B spend contract mismatch")
+    return execution
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=7200,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_long_horizon_stage_b",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_stage_b(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon_stage_b import run_contract
+    _authorize_long_horizon_stage_b(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    root = VOLUME_PATH / "authentic-world-long-horizon-stage-b" / expected_manifest_sha256 / "run"
+    phase, run = run_contract(expected_manifest_sha256, expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256)
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"Phase B failed: {result.get('error')}")
+        return result
+
+
+
+def _authorize_behavioral_distillation(*, expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool, confirm_h100: bool) -> dict[str, Any]:
+    from jump_benchmark.behavioral_distillation import MANIFEST_SHA256, behavioral_distillation_manifest
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("behavioral distillation requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("behavioral-distillation immutable identity mismatch")
+    execution = behavioral_distillation_manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100" or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1 or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1 or abs(forecast - execution["forecast_usd"]) > 1e-9
+        or forecast > execution["aggregate_authority_ceiling_usd"]
+    ):
+        raise RunnerError("behavioral-distillation resource or cost contract mismatch")
+    return execution
+
+
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_behavioral_distillation_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_behavioral_distillation_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
+    """Same-image CPU/config/task-promotion preflight; never loads Gemma weights."""
+    import hashlib
+    import tempfile
+    from transformers import AutoConfig, AutoModelForMultimodalLM, AutoTokenizer
+    from safetensors.torch import load_file
+    from jump_benchmark.behavioral_distillation import MANIFEST_SHA256, cpu_preflight, run_contract
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION
+    from jump_benchmark.long_horizon import build_long_horizon_modules
+    from jump_benchmark.long_horizon_stage_b import SOURCE_DECODER_SHA256, SOURCE_ENCODER_SHA256, SOURCE_RELATIVE_ROOT
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("behavioral-distillation preflight identity mismatch")
+    source=VOLUME_PATH/SOURCE_RELATIVE_ROOT; ep=source/"encoder.safetensors"; dp=source/"decoder.safetensors"
+    if hashlib.sha256(ep.read_bytes()).hexdigest()!=SOURCE_ENCODER_SHA256 or hashlib.sha256(dp.read_bytes()).hexdigest()!=SOURCE_DECODER_SHA256:
+        raise RunnerError("behavioral-distillation source checksum mismatch")
+    encoder,decoder=build_long_horizon_modules();encoder.load_state_dict(load_file(ep),strict=True);decoder.load_state_dict(load_file(dp),strict=True);encoder.eval();decoder.eval()
+    tokenizer=AutoTokenizer.from_pretrained(BASE_REPO_ID,revision=BASE_REVISION,trust_remote_code=False)
+    config=AutoConfig.from_pretrained(BASE_REPO_ID,revision=BASE_REVISION,trust_remote_code=False)
+    model_class=AutoModelForMultimodalLM._model_mapping[type(config)]
+    seam=cpu_preflight(tokenizer,encoder,decoder)
+    phase,run=run_contract(expected_manifest_sha256,expected_code_sha,dry_run=True)
+    with tempfile.TemporaryDirectory() as temporary:
+        result=execute_local_run(phase,run,Path(temporary)/"behavioral-distillation-preflight",expected_manifest_sha256)
+    if result.get("status")!="completed" or result["provenance"]["code_version"]!=CODE_VERSION:
+        raise RunnerError("behavioral-distillation canonical preflight failed")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"model_type":config.model_type,"model_class":model_class.__name__,"seam":seam,"base_weights_loaded":False,"gpu_allocated":False,"persistent_root_created":False}
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=3600,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_behavioral_distillation",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_behavioral_distillation(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool=False, confirm_h100: bool=False) -> dict[str, Any]:
+    from jump_benchmark.behavioral_distillation import run_contract
+    _authorize_behavioral_distillation(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-behavioral-distillation"/expected_manifest_sha256/"run"
+    phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed": raise RunnerError(f"behavioral distillation failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-behavioral-distillation")
+def submit_behavioral_distillation(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool=False, confirm_h100: bool=False) -> None:
+    execution=_authorize_behavioral_distillation(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    call=authentic_world_behavioral_distillation.spawn(expected_manifest_sha256,expected_code_sha,confirm_paid=True,confirm_h100=True)
+    record={"app_name":APP_NAME,"function":"authentic_world_behavioral_distillation","call_id":call.object_id,"manifest_sha256":expected_manifest_sha256,"code_sha":expected_code_sha,"forecast_usd":execution["forecast_usd"],"hard_ceiling_usd":execution["aggregate_authority_ceiling_usd"]}
+    registry=Path(".jump/submissions");registry.mkdir(parents=True,exist_ok=True);path=registry/f"{call.object_id}.json"
+    with path.open("x") as handle:
+        handle.write(json.dumps(record,indent=2,sort_keys=True)+"\n");handle.flush();os.fsync(handle.fileno())
+    fd=os.open(registry,os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    print(json.dumps({**record,"record_path":str(path)},sort_keys=True))
+
+
+def _authorize_object_jepa(*, expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool, confirm_h100: bool) -> dict[str, Any]:
+    from jump_benchmark.object_jepa import MANIFEST_SHA256, object_jepa_manifest
+    if confirm_paid is not True or confirm_h100 is not True: raise RunnerError("object JEPA requires literal paid and H100 confirmations")
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION: raise RunnerError("object JEPA immutable identity mismatch")
+    execution=object_jepa_manifest()["execution"];forecast=execution["timeout_seconds"]/3600*execution["h100_rate_usd_per_hour"]
+    if execution["resource"]!="H100" or execution["gpu_count"]!=1 or execution["max_containers"]!=1 or execution["max_inputs"]!=1 or execution["max_attempts"]!=1 or abs(forecast-execution["forecast_usd"])>1e-9 or forecast>execution["aggregate_authority_ceiling_usd"]: raise RunnerError("object JEPA resource/cost contract mismatch")
+    return execution
+
+@app.function(image=track_h_image,timeout=300,max_containers=1,name="authentic_world_object_jepa_preflight")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_preflight(expected_manifest_sha256: str,expected_code_sha: str)->dict[str,Any]:
+    from jump_benchmark.object_jepa import MANIFEST_SHA256,cpu_preflight
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("object JEPA preflight identity mismatch")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"seam":cpu_preflight(),"gpu_allocated":False,"persistent_root_created":False}
+
+@app.function(image=track_h_image,gpu="H100",timeout=3600,max_containers=1,volumes={str(VOLUME_PATH):volume},name="authentic_world_object_jepa_pilot")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_pilot(expected_manifest_sha256: str,expected_code_sha: str,confirm_paid: bool=False,confirm_h100: bool=False)->dict[str,Any]:
+    from jump_benchmark.object_jepa import run_contract
+    _authorize_object_jepa(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-object-jepa"/expected_manifest_sha256/"run";phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed":raise RunnerError(f"object JEPA failed: {result.get('error')}")
+        return result
+
+
+def _authorize_object_jepa_residual(*,expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool,confirm_h100:bool)->dict[str,Any]:
+    from jump_benchmark.object_jepa_residual import MANIFEST_SHA256,manifest
+    if confirm_paid is not True or confirm_h100 is not True:raise RunnerError("residual JEPA requires literal paid and H100 confirmations")
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("residual JEPA immutable identity mismatch")
+    e=manifest()["execution"];forecast=e["timeout_seconds"]/3600*e["h100_rate_usd_per_hour"]
+    if e["resource"]!="H100" or e["gpu_count"]!=1 or e["max_containers"]!=1 or e["max_inputs"]!=1 or e["max_attempts"]!=1 or abs(forecast-e["forecast_usd"])>1e-9 or forecast>e["aggregate_authority_ceiling_usd"]:raise RunnerError("residual JEPA resource/cost mismatch")
+    return e
+
+@app.function(image=track_h_image,timeout=300,max_containers=1,name="authentic_world_object_jepa_residual_preflight")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_residual_preflight(expected_manifest_sha256:str,expected_code_sha:str)->dict[str,Any]:
+    import torch
+    from jump_benchmark.object_jepa_residual import MANIFEST_SHA256,build_predictor
+    from jump_benchmark.object_jepa import LATENT_DIM
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("residual JEPA preflight identity mismatch")
+    p=build_predictor();z=torch.randn(2,LATENT_DIM);a=torch.randn(2,6,2);out=p(z,a,torch.tensor([0,3]));zero=p(z,torch.zeros_like(a),torch.tensor([0,3]));
+    if tuple(out.shape)!=(2,LATENT_DIM) or torch.equal(out,zero):raise RunnerError("residual JEPA action/shape seam failed")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"shape":list(out.shape),"action_changes_transition":True,"gpu_allocated":False,"persistent_root_created":False}
+
+@app.function(image=track_h_image,gpu="H100",timeout=3600,max_containers=1,volumes={str(VOLUME_PATH):volume},name="authentic_world_object_jepa_residual_pilot")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_residual_pilot(expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool=False,confirm_h100:bool=False)->dict[str,Any]:
+    from jump_benchmark.object_jepa_residual import run_contract
+    _authorize_object_jepa_residual(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-object-jepa-residual"/expected_manifest_sha256/"run";phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed":raise RunnerError(f"residual JEPA failed: {result.get('error')}")
+        return result
+
+@app.local_entrypoint(name="submit-long-horizon")
+def submit_long_horizon(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> None:
+    execution = _authorize_long_horizon_launch(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    call = authentic_world_long_horizon.spawn(
+        mode,
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=True,
+        confirm_h100=True,
+    )
+    record = {
+        "app_name": APP_NAME,
+        "function": "authentic_world_long_horizon",
+        "call_id": call.object_id,
+        "mode": mode,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "forecast_usd": execution["forecast_usd"],
+        "aggregate_authority_ceiling_usd": execution["aggregate_authority_ceiling_usd"],
+    }
+    registry = Path(".jump/submissions")
+    registry.mkdir(parents=True, exist_ok=True)
+    record_path = registry / f"{call.object_id}.json"
+    with record_path.open("x") as handle:
+        handle.write(json.dumps(record, sort_keys=True, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(registry, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    print(json.dumps({**record, "record_path": str(record_path)}, sort_keys=True))
 
 
 def _authorize_stage_d_launch(

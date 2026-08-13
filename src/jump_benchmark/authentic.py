@@ -300,8 +300,8 @@ def serialize_latent_tensor(tensor: Any) -> SerializedLatent:
 
     value = tensor.detach().to(device="cpu", dtype=torch.float32).contiguous()
     shape = tuple(value.shape)
-    if not shape or shape[-1] != LATENT_DIM:
-        raise ValueError(f"world latent final dimension must be {LATENT_DIM}")
+    if not shape or shape[-1] <= 0:
+        raise ValueError("world latent must have a nonempty final dimension")
     raw = value.numpy().astype("<f4", copy=False).tobytes(order="C")
     return SerializedLatent(
         "float32-le", shape, raw,
@@ -399,17 +399,17 @@ def assert_injection_prompt_token_identity(tokenizer: Any) -> dict[str, Any]:
     return {"token_ids_equal": True, "token_count": len(e_ids), "z_serialized_in_prompt": False}
 
 
-def build_gated_residual_projector(hidden_dim: int):
+def build_gated_residual_projector(hidden_dim: int, latent_dim: int = LATENT_DIM):
     import torch
 
     class GatedResidualProjector(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.projector = torch.nn.Linear(LATENT_DIM, hidden_dim, bias=False)
+            self.projector = torch.nn.Linear(latent_dim, hidden_dim, bias=False)
             self.gate = torch.nn.Parameter(torch.zeros(()))
 
         def forward(self, hidden_states, exact_z):
-            if exact_z.shape[-1] != LATENT_DIM:
+            if exact_z.shape[-1] != latent_dim:
                 raise ValueError("injection z dimension mismatch")
             delta = self.projector(exact_z).unsqueeze(1) * torch.tanh(self.gate)
             mask = torch.zeros_like(hidden_states)

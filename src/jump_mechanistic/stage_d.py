@@ -398,16 +398,17 @@ def scrambled_injection(
     seed: int,
     indices: list[int],
 ) -> tuple[dict[str, Any], bytes]:
-    """Derive the frozen 16-float permutation and its exact injection binding."""
+    """Derive a full-element float32 permutation and its exact injection binding."""
     learned = validate_learned_latent_evidence(
         open_result_envelope(learned_latent_envelope)
     )
     verify_latent_tensor_bytes(learned, source_tensor_bytes)
     tensor = learned["tensor"]
-    if tensor["dtype"] != "float32-le" or math.prod(tensor["shape"]) != 16:
-        raise ValueError("Stage D scrambled_z requires exactly 16 little-endian float32 elements")
-    _validate_seed_and_indices(seed, indices)
-    if indices == list(range(16)):
+    element_count = math.prod(tensor["shape"])
+    if tensor["dtype"] != "float32-le" or element_count < 2:
+        raise ValueError("Stage D scrambled_z requires at least two little-endian float32 elements")
+    _validate_seed_and_indices(seed, indices, element_count=element_count)
+    if indices == list(range(element_count)):
         raise ValueError("Stage D scrambled_z permutation must not be identity")
     permuted = b"".join(
         source_tensor_bytes[index * 4 : (index + 1) * 4] for index in indices
@@ -584,8 +585,9 @@ def _verify_scrambled_injection(
     source_raw: bytes,
     injected_raw: bytes,
 ) -> tuple[str, str]:
-    if descriptor["dtype"] != "float32-le" or math.prod(descriptor["shape"]) != 16:
-        raise ValueError("Stage D scrambled_z requires exactly 16 little-endian float32 elements")
+    element_count = math.prod(descriptor["shape"])
+    if descriptor["dtype"] != "float32-le" or element_count < 2:
+        raise ValueError("Stage D scrambled_z requires at least two little-endian float32 elements")
     if not isinstance(injection["tensor_artifact_name"], str) or not injection[
         "tensor_artifact_name"
     ]:
@@ -614,8 +616,8 @@ def _verify_scrambled_injection(
     ):
         raise ValueError("Stage D permutation contract drifted")
     indices = permutation["indices"]
-    _validate_seed_and_indices(permutation["seed"], indices)
-    if indices == list(range(16)):
+    _validate_seed_and_indices(permutation["seed"], indices, element_count=element_count)
+    if indices == list(range(element_count)):
         raise ValueError("Stage D scrambled_z permutation must not be identity")
     if permutation["indices_sha256"] != _sha(indices):
         raise ValueError("Stage D scrambled_z indices hash mismatch")
@@ -641,16 +643,18 @@ def _verify_scrambled_injection(
     return world_sha, raw_sha
 
 
-def _validate_seed_and_indices(seed: Any, indices: Any) -> None:
+def _validate_seed_and_indices(seed: Any, indices: Any, *, element_count: int) -> None:
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 0xFFFFFFFF:
         raise ValueError("Stage D permutation seed must be a uint32")
     if (
         not isinstance(indices, list)
-        or len(indices) != 16
+        or len(indices) != element_count
         or any(isinstance(index, bool) or not isinstance(index, int) for index in indices)
-        or sorted(indices) != list(range(16))
+        or sorted(indices) != list(range(element_count))
     ):
-        raise ValueError("Stage D permutation indices must be 16 unique values 0..15")
+        raise ValueError(
+            f"Stage D permutation indices must be {element_count} unique values 0..{element_count - 1}"
+        )
 
 
 def _joint_score(answer: Mapping[str, Any], target: Mapping[str, Any]) -> float:
