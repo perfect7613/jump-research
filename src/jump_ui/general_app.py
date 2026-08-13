@@ -46,6 +46,18 @@ def create_general_app():
             return None, gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), gr.update(visible=False)
         return planned, gr.update(value=plan_shell(plan_rows(planned["plan"])), visible=True), gr.update(visible=True)
 
+    def start_planning():
+        return (
+            gr.update(
+                value='<p class="progress-copy">Building the experiment plan… This usually takes about a minute.</p>',
+                visible=True,
+            ),
+            gr.update(value="Building experiment plan…", interactive=False),
+        )
+
+    def finish_planning():
+        return gr.update(visible=False), gr.update(value="Build experiment plan", interactive=True)
+
     def confirm_and_run(planned):
         if not isinstance(planned, dict):
             return gr.update(value='<div class="error-copy">Build and confirm a plan first.</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
@@ -80,7 +92,17 @@ def create_general_app():
         gr.HTML(particle_research_card())
         for chip, example in zip(chips, EXAMPLES):
             chip.click(lambda value=example: value, outputs=question, queue=False)
-        plan_button.click(make_plan, inputs=question, outputs=[state, plan_view, confirm], queue=False)
+        planning = plan_button.click(
+            start_planning,
+            outputs=[status, plan_button],
+            queue=False,
+        ).then(
+            make_plan,
+            inputs=question,
+            outputs=[state, plan_view, confirm],
+            concurrency_limit=1,
+        )
+        planning.then(finish_planning, outputs=[status, plan_button], queue=False)
         confirm.click(confirm_and_run, inputs=state, outputs=[status, *cards, details], concurrency_limit=1)
     demo._jump_css = GENERAL_CSS
     demo.queue(default_concurrency_limit=1)
