@@ -55,7 +55,8 @@ def test_general_app_has_plan_confirmation_and_particle_research_is_secondary():
     assert "Confirm plan and run simulation" in config
     make_plan = next(item for item in app_config["dependencies"] if item["api_name"] == "make_plan")
     assert make_plan["queue"] is True
-    assert make_plan["trigger_after"] is not None
+    assert make_plan["trigger_after"] is None
+    assert make_plan["types"]["generator"] is True
     assert "Test an idea. See what the simulation says." in config
     assert "Original research demo" in config
 
