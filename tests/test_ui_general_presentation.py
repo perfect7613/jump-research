@@ -23,14 +23,15 @@ from jump_ui.general_presentation import (
 
 def test_general_product_copy_is_exact_and_bounded():
     assert HEADLINE == "Test an idea. See what the simulation says."
-    assert SUBCOPY.startswith("Describe a question in plain English.")
+    assert SUBCOPY.startswith("Choose a supported question in plain English.")
     assert QUESTION == "What do you want to test?"
     assert EXAMPLES == (
-        "Does changing traffic-light timing reduce a traffic jam?",
+        "Does increasing service capacity reduce the average queue length?",
         "How often does switching doors win in the Monty Hall problem?",
-        "What happens to an epidemic if contact rates fall by half?",
+        "Does raising a Bernoulli success probability increase the observed success rate?",
     )
-    assert "no code, links, files, or real-world actions" in SCOPE
+    assert "Supported computational experiments only" in SCOPE
+    assert "Unsupported questions fail closed" in hero_html()
     assert "particle" not in hero_html().lower()
     assert "six-particle benchmark" in particle_research_card()
 

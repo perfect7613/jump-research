@@ -56,9 +56,9 @@ def test_general_app_has_plan_confirmation_and_particle_research_is_secondary():
     assert "Original research demo" in config
 
 
-def test_epidemic_fixture_passes_direct_plan_and_run_validation():
-    planned = prepare_fixture(EXAMPLES[2], request_id="request-epidemic", repetitions=4)
+def test_bernoulli_fixture_passes_direct_plan_and_run_validation():
+    planned = prepare_fixture(EXAMPLES[2], request_id="request-bernoulli", repetitions=4)
     prepared = confirm_fixture(planned, confirmed=True)
     sections = result_rows(execute_fixture(prepared), prepared.plan)
     assert sections["Was the prediction right?"].startswith("Yes")
-    assert "-234" in sections["Simulation"]
+    assert "0.2" in sections["Simulation"]

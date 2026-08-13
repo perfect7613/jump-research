@@ -5,6 +5,8 @@ import json
 import pytest
 
 from jump_ui.general_client import (
+    EXPECTED_MODEL,
+    GENERAL_COORDINATOR_URL,
     GeneralCoordinatorClient,
     GeneralCoordinatorError,
     QUESTION_VERSION,
@@ -30,13 +32,7 @@ class Response:
 def responses_for(intent: str):
     prepared = prepare_fixture(intent, request_id="req-test", repetitions=3)
     run = execute_fixture(confirm_fixture(prepared, confirmed=True))
-    model = {
-        "repo_id": "google/gemma-3-4b-it",
-        "revision": "a" * 40,
-        "transformers_revision": "b" * 40,
-        "frozen": True,
-        "adapter_id": None,
-    }
+    model = dict(EXPECTED_MODEL)
     plan = {
         "schema_version": "jump.experiment-plan-response/v1",
         "status": "awaiting_confirmation",
@@ -119,7 +115,14 @@ def test_client_rejects_response_aliases_and_unsafe_extras(monkeypatch, field):
 
 
 def test_client_has_no_unconfigured_fallback(monkeypatch):
-    monkeypatch.delenv("JUMP_GENERAL_COORDINATOR_URL", raising=False)
     monkeypatch.delenv("JUMP_MODAL_TOKEN", raising=False)
     with pytest.raises(GeneralCoordinatorError, match="No result was substituted"):
         GeneralCoordinatorClient.from_environment()
+
+
+def test_environment_client_uses_only_reviewed_endpoint_and_server_token(monkeypatch):
+    monkeypatch.setenv("JUMP_MODAL_TOKEN", "server-token")
+    monkeypatch.setenv("JUMP_GENERAL_COORDINATOR_URL", "https://unreviewed.invalid")
+    client = GeneralCoordinatorClient.from_environment()
+    assert client.base_url == GENERAL_COORDINATOR_URL
+    assert client.token == "server-token"

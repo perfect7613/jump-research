@@ -16,6 +16,16 @@ QUESTION_VERSION = "jump.experiment-question/v1"
 PLAN_RESPONSE_VERSION = "jump.experiment-plan-response/v1"
 CONFIRMATION_VERSION = "jump.experiment-confirmation/v1"
 RUN_RESPONSE_VERSION = "jump.experiment-run-response/v1"
+GENERAL_COORDINATOR_URL = (
+    "https://ameymuke252003--jump-general-experiment-workbench-genera-d81606.modal.run"
+)
+EXPECTED_MODEL = {
+    "repo_id": "google/gemma-4-12B-it",
+    "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+    "transformers_revision": "918dbf131d0df5b46e3f6e1d96174d62aa4d16d6",
+    "frozen": True,
+    "adapter_id": None,
+}
 
 
 class GeneralCoordinatorError(RuntimeError):
@@ -30,13 +40,12 @@ class GeneralCoordinatorClient:
 
     @classmethod
     def from_environment(cls) -> "GeneralCoordinatorClient":
-        base_url = os.environ.get("JUMP_GENERAL_COORDINATOR_URL", "").strip()
         token = os.environ.get("JUMP_MODAL_TOKEN", "").strip()
-        if not base_url or not token:
+        if not token:
             raise GeneralCoordinatorError(
                 "The general coordinator is not configured. No result was substituted."
             )
-        return cls(base_url=base_url, token=token)
+        return cls(base_url=GENERAL_COORDINATOR_URL, token=token)
 
     def plan(self, request: Mapping[str, Any]) -> dict[str, Any]:
         expected = {"schema_version", "request_id", "session_id", "intent", "seed", "repetitions"}
@@ -162,6 +171,8 @@ def _validate_model(value: Any) -> None:
         raise GeneralCoordinatorError("The frozen model identity is incomplete.")
     if value["frozen"] is not True or value["adapter_id"] is not None:
         raise GeneralCoordinatorError("The coordinator must use a frozen base model without an adapter.")
+    if value != EXPECTED_MODEL:
+        raise GeneralCoordinatorError("The coordinator model identity does not match the reviewed pins.")
 
 
 def _validated_plan(value: Any) -> dict[str, Any]:

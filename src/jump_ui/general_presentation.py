@@ -11,17 +11,17 @@ from typing import Mapping
 
 HEADLINE = "Test an idea. See what the simulation says."
 SUBCOPY = (
-    "Describe a question in plain English. JUMP turns it into a simple experiment, "
-    "predicts the outcome, runs the simulation, and compares the two."
+    "Choose a supported question in plain English. JUMP turns it into a bounded experiment, "
+    "records a prediction, runs the simulation, and compares the two."
 )
 QUESTION = "What do you want to test?"
 EXAMPLES = (
-    "Does changing traffic-light timing reduce a traffic jam?",
+    "Does increasing service capacity reduce the average queue length?",
     "How often does switching doors win in the Monty Hall problem?",
-    "What happens to an epidemic if contact rates fall by half?",
+    "Does raising a Bernoulli success probability increase the observed success rate?",
 )
 SCOPE = (
-    "Computational simulations only · no code, links, files, or real-world actions · "
+    "Supported computational experiments only · no code, links, files, or real-world actions · "
     "600 characters max"
 )
 PLAN_LABELS = ("Question", "Hypothesis", "Change", "Measure", "Assumptions", "Repetitions")
@@ -40,7 +40,8 @@ def hero_html() -> str:
         '<p class="jump-kicker">JUMP · computational thought experiments</p>'
         f'<h1 class="jump-title">{escape(HEADLINE)}</h1>'
         f'<p class="jump-deck">{escape(SUBCOPY)}</p>'
-        '<p class="scope-note">JUMP supports bounded simulation questions. It does not run '
+        '<p class="scope-note">Current support is limited to Monty Hall, queue or traffic capacity, '
+        'and Bernoulli probability experiments. Unsupported questions fail closed. JUMP does not run '
         'user code, open links or files, or take actions in the real world.</p>'
         '</header>'
     )

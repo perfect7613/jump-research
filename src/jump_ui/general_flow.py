@@ -62,21 +62,21 @@ class Template:
 
 TEMPLATES = {
     "traffic": Template(
-        "Changing traffic-light timing will reduce average queue length.", "Traffic-light timing",
-        "Current timing", "Adjusted timing", "Average queue length", "vehicles",
-        "Both conditions use the same traffic arrival pattern.", "less",
-        "Adjusted timing should produce a shorter average queue.", 18.4, 12.1,
+        "Increasing service capacity will reduce average queue length.", "Queue service capacity",
+        "Capacity 4", "Capacity 6", "Average queue length", "agents",
+        "Both conditions use the same arrival pattern.", "less",
+        "Higher service capacity should produce a shorter average queue.", 18.4, 12.1,
     ),
     "monty": Template(
         "Switching doors will win more often than staying.", "Door strategy", "Stay", "Switch",
         "Win rate", "proportion", "The host always reveals a losing door and offers a switch.",
         "greater", "Switching should win about twice as often as staying.", 0.34, 0.67,
     ),
-    "epidemic": Template(
-        "Halving contact rates will reduce the simulated infection peak.", "Contact rate",
-        "Current rate", "Half rate", "Peak infected population", "people",
-        "Population size and recovery behavior stay fixed.", "less",
-        "Half the contact rate should produce a lower infection peak.", 421.0, 187.0,
+    "bernoulli": Template(
+        "Raising the success probability will increase the observed success rate.", "Success probability",
+        "Probability 0.5", "Probability 0.7", "Observed success rate", "proportion",
+        "Each draw is an independent Bernoulli trial.", "greater",
+        "The higher probability should produce a higher observed success rate.", 0.5, 0.7,
     ),
 }
 MODEL = FrozenModel(model_id="google/gemma-fixture", revision="a" * 40)
@@ -86,9 +86,9 @@ def _template(intent: str) -> Template:
     text = intent.casefold()
     if "monty" in text or "door" in text:
         return TEMPLATES["monty"]
-    if "epidemic" in text or "contact" in text or "infection" in text:
-        return TEMPLATES["epidemic"]
-    if "traffic" in text or "jam" in text or "light" in text:
+    if "bernoulli" in text or "probability" in text or "success rate" in text:
+        return TEMPLATES["bernoulli"]
+    if "traffic" in text or "queue" in text or "capacity" in text:
         return TEMPLATES["traffic"]
     raise GeneralUIError("The non-live fixture supports the three examples only. No result was substituted.")
 
@@ -201,7 +201,10 @@ def result_rows(run: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, st
         "Prediction": checked_run["execution"]["prediction"]["summary"],
         "Simulation": f"The intervention changed the measured average by {estimate:.3g}.",
         "Was the prediction right?": "Yes—the simulated direction matched the prediction." if matched else "No—the simulated direction differed from the prediction.",
-        "What the model changed its mind about": checked_run["revision"]["interpretation"],
+        "What the model changed its mind about": (
+            f"Disposition: {checked_run['revision']['disposition']}. "
+            f"{checked_run['revision']['interpretation']}"
+        ),
         "Evidence": f"Plan {checked_run['plan_id']} and run {checked_run['run_id']} passed the corrected evidence contracts.",
     }
 
