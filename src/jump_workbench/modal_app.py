@@ -104,7 +104,7 @@ def execute_visual_spec_v2(
     spec_value: dict[str, Any],
     confirmation: dict[str, Any],
     prediction: dict[str, Any],
-) -> dict[str, Any]:
+) -> bytes:
     """Interpret a sealed declarative spec; no generated program is accepted."""
     from jump_contracts.thought_experiments import canonical_json, validate_experiment_spec
     from .visual_engine import execute_visual_spec
@@ -117,7 +117,18 @@ def execute_visual_spec_v2(
         "prediction_sha256": prediction_sha,
     }:
         raise ValueError("visual execution requires confirmation bound to the spec and prediction")
-    return execute_visual_spec(spec)
+    # Modal's restricted-access container cannot upload oversized function
+    # outputs to blob storage. Compress the bounded JSON result in-container;
+    # the trusted coordinator opens and validates it before constructing a run.
+    import zlib
+
+    result = canonical_json(execute_visual_spec(spec))
+    if len(result) > 1_000_000:
+        raise ValueError("visual result exceeds the one-megabyte canonical JSON cap")
+    compressed = zlib.compress(result, level=9)
+    if len(compressed) > 200_000:
+        raise ValueError("compressed visual result exceeds the transport cap")
+    return compressed
 
 
 def execute_prepared_on_modal(prepared: "PreparedExecution") -> dict[str, Any]:
@@ -242,7 +253,15 @@ def visual_coordinator_compute_v2(action: str, body: dict[str, Any]) -> dict[str
         }
         started_at = datetime.now(timezone.utc)
         call = execute_visual_spec_v2.spawn(spec, confirmation, prediction)
-        result = call.get(timeout=70)
+        compressed = call.get(timeout=70)
+        if not isinstance(compressed, bytes) or len(compressed) > 200_000:
+            raise ValueError("visual engine returned an invalid compressed result")
+        import zlib
+
+        opened = zlib.decompress(compressed)
+        if len(opened) > 1_000_000:
+            raise ValueError("opened visual result exceeds the canonical JSON cap")
+        result = json.loads(opened)
         return {
             "modal_call_id": call.object_id,
             "started_at": started_at,
