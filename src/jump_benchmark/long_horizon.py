@@ -46,7 +46,7 @@ from .simulator import EpisodeSpec, SimulatorConfig, derive_seed, generate_episo
 from .task_adapter import write_track_h_task_evidence
 
 
-LONG_HORIZON_SCHEMA_VERSION = "jump.track-h-long-horizon-manifest/v1"
+LONG_HORIZON_SCHEMA_VERSION = "jump.track-h-long-horizon-manifest/v2"
 LONG_HORIZON_RESULT_VERSION = "jump.track-h-long-horizon-result/v1"
 FUTURE_HORIZON = 8
 LATENT_DIM = 32
@@ -90,9 +90,19 @@ def long_horizon_manifest(mode: str) -> dict[str, Any]:
     seeds = [120731] if pilot else [120731, 120732, 120733]
     return {
         "schema_version": LONG_HORIZON_SCHEMA_VERSION,
-        "experiment_id": f"track-h-long-horizon-{mode}-v1",
+        "experiment_id": f"track-h-long-horizon-residual-{mode}-v2",
         "phase": "A",
         "mode": mode,
+        "architecture_attempt": 2,
+        "recovery_of": {
+            "architecture_attempt": 1,
+            "pilot_manifest_sha256": "0f0fa9cb2428d1ae909ed4a2cffd7b2c0d988ec003058e8c2abc8196d496530b",
+            "call_id": "fc-01KZXJKT35S00JR52EZR72WFS1",
+            "decision": "pivot",
+            "diagnosis": "absolute-state decoder underperformed copy-last persistence on both untouched splits",
+            "source_outputs_reused": False,
+            "source_root_mutated": False,
+        },
         "claim_label": "observation-only predictive engineering study; no behavioral, causal, or mechanistic claim",
         "input": {
             "frames": EVIDENCE_FRAMES,
@@ -121,9 +131,9 @@ def long_horizon_manifest(mode: str) -> dict[str, Any]:
         },
         "model": {
             "encoder": "flatten(4x6x4)->Linear(96,128)->GELU->Linear(128,64)->GELU->Linear(64,32)",
-            "decoder": "Linear(32,128)->GELU->Linear(128,256)->GELU->Linear(256,8x6x2)",
+            "decoder": "zero-initialized residual: Linear(32,128)->GELU->Linear(128,256)->GELU->Linear(256,8x6x2), added to last observed positions",
             "latent_dim": LATENT_DIM,
-            "objective": "future-position MSE plus 1e-5 mean-squared-z bottleneck penalty",
+            "objective": "future-position MSE after adding predicted displacement residual to last visible positions, plus 1e-5 mean-squared-z bottleneck penalty",
             "relation_or_law_supervision": False,
             "steps": 1800 if pilot else 3200,
             "batch_size": 128,
@@ -187,7 +197,16 @@ def build_long_horizon_modules():
         torch.nn.GELU(),
         torch.nn.Linear(256, FUTURE_HORIZON * 6 * 2),
     )
+    torch.nn.init.zeros_(decoder[-1].weight)
+    torch.nn.init.zeros_(decoder[-1].bias)
     return encoder, decoder
+
+
+def _predict(encoder: Any, decoder: Any, inputs: Any):
+    z = encoder(inputs)
+    residual = decoder(z).reshape(-1, FUTURE_HORIZON, 6, 2)
+    persistence = inputs[:, -1, :, :2].unsqueeze(1).expand_as(residual)
+    return z, persistence + residual, persistence
 
 
 def _record(episode: dict[str, Any], split: str) -> dict[str, Any]:
@@ -275,9 +294,7 @@ def evaluate_rollout(encoder: Any, decoder: Any, dataset: dict[str, Any], split:
     rows, inputs, targets = _tensors(dataset, split, device)
     encoder.eval(); decoder.eval()
     with torch.no_grad():
-        z = encoder(inputs)
-        prediction = decoder(z).reshape(-1, FUTURE_HORIZON, 6, 2)
-    persistence = inputs[:, -1, :, :2].unsqueeze(1).expand_as(targets)
+        z, prediction, persistence = _predict(encoder, decoder, inputs)
     scale = targets.std(unbiased=False).clamp_min(1e-8)
     model_rmse = ((prediction - targets).square().mean(dim=(1, 2, 3)).sqrt() / scale)
     persistence_rmse = ((persistence - targets).square().mean(dim=(1, 2, 3)).sqrt() / scale)
@@ -327,8 +344,7 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
     final_loss = None
     for step in range(steps):
         indices = torch.randint(train_x.shape[0], (batch_size,), generator=generator, device=device)
-        z = encoder(train_x[indices])
-        prediction = decoder(z).reshape(-1, FUTURE_HORIZON, 6, 2)
+        z, prediction, _ = _predict(encoder, decoder, train_x[indices])
         loss = torch.nn.functional.mse_loss(prediction, train_y[indices]) + 1e-5 * z.square().mean()
         if not torch.isfinite(loss):
             raise RuntimeError("non-finite longer-horizon predictive loss")
