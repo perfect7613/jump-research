@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import base64
-import json
 import math
 import re
 import unicodedata
@@ -36,7 +35,7 @@ SPEC_FIELDS = frozenset(
         "normalized_intent_sha256",
         "summary",
         "template_id",
-        "world_count",
+        "object_count",
         "seed",
         "observed_steps",
         "prediction_horizon",
@@ -47,7 +46,9 @@ SPEC_FIELDS = frozenset(
     }
 )
 RUN_FIELDS = frozenset({"schema_version", "status", "live", "request_id", "plan", "result", "error"})
-RESULT_FIELDS = frozenset({"sealed_result", "decoded_image", "presentation"})
+RESULT_FIELDS = frozenset(
+    {"experiment_id", "experiment_spec_sha256", "sealed_result", "decoded_image", "presentation"}
+)
 DECODED_IMAGE_FIELDS = frozenset({"artifact_name", "media_type", "encoding", "data", "sha256"})
 PRESENTATION_FIELDS = frozenset({"world_built", "model_prediction", "what_changed", "correctness"})
 CORRECTNESS_FIELDS = frozenset(
@@ -66,7 +67,7 @@ LIMIT_FIELDS = frozenset(
     {
         "max_intent_chars",
         "max_worlds",
-        "max_objects_per_world",
+        "object_count_per_world",
         "max_observed_steps",
         "max_prediction_horizon",
     }
@@ -219,7 +220,7 @@ def _limits() -> dict[str, int]:
     return {
         "max_intent_chars": MAX_INTENT_CHARS,
         "max_worlds": MAX_WORLDS,
-        "max_objects_per_world": OBJECT_COUNT,
+        "object_count_per_world": OBJECT_COUNT,
         "max_observed_steps": MAX_OBSERVED_STEPS,
         "max_prediction_horizon": MAX_PREDICTION_HORIZON,
     }
@@ -246,7 +247,7 @@ def compile_experiment_intent(value: Any) -> dict[str, Any]:
         "normalized_intent_sha256": intent_hash,
         "summary": _SUMMARY[template],
         "template_id": template,
-        "world_count": OBJECT_COUNT,
+        "object_count": OBJECT_COUNT,
         "seed": seed,
         "observed_steps": observed_steps,
         "prediction_horizon": 1,
@@ -275,8 +276,8 @@ def validate_experiment_spec(value: Any) -> dict[str, Any]:
     template = spec["template_id"]
     if template not in TEMPLATES or spec["summary"] != _SUMMARY.get(template):
         raise ValueError("template_id and summary must be server-owned allowlisted values")
-    if spec["world_count"] != OBJECT_COUNT:
-        raise ValueError("world_count must be exactly six")
+    if spec["object_count"] != OBJECT_COUNT:
+        raise ValueError("object_count must be exactly six")
     _uint32(spec["seed"], "seed")
     _positive_int(spec["observed_steps"], "observed_steps", MAX_OBSERVED_STEPS)
     _positive_int(spec["prediction_horizon"], "prediction_horizon", MAX_PREDICTION_HORIZON)
@@ -376,11 +377,23 @@ def build_planned_run(*, request_id: str, plan: Any) -> dict[str, Any]:
     )
 
 
-def _validated_completed_result(value: Any) -> dict[str, Any]:
+def _validated_completed_result(value: Any, plan: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != RESULT_FIELDS:
         raise ValueError(f"completed result must contain exactly {sorted(RESULT_FIELDS)}")
+    expected_spec_sha256 = sha256_json(plan)
+    if value["experiment_id"] != plan["experiment_id"]:
+        raise ValueError("completed result experiment_id does not match its plan")
+    if value["experiment_spec_sha256"] != expected_spec_sha256:
+        raise ValueError("completed result experiment_spec_sha256 does not match its plan")
     payload = open_result_envelope(value["sealed_result"], expected_source="live")
     evidence = validate_learned_latent_evidence(payload)
+    producer_bindings = evidence.get("answer", {}).get("producer_bindings")
+    if not isinstance(producer_bindings, dict):
+        raise ValueError("sealed answer requires producer_bindings")
+    if producer_bindings.get("experiment_id") != plan["experiment_id"]:
+        raise ValueError("sealed answer experiment_id does not match its plan")
+    if producer_bindings.get("experiment_spec_sha256") != expected_spec_sha256:
+        raise ValueError("sealed answer experiment_spec_sha256 does not match its plan")
     image = value["decoded_image"]
     if not isinstance(image, dict) or set(image) != DECODED_IMAGE_FIELDS:
         raise ValueError(f"decoded_image must contain exactly {sorted(DECODED_IMAGE_FIELDS)}")
@@ -442,7 +455,7 @@ def validate_experiment_run(value: Any) -> dict[str, Any]:
     if value["status"] == "completed":
         if value["error"] is not None:
             raise ValueError("completed responses require a null error")
-        _validated_completed_result(value["result"])
+        _validated_completed_result(value["result"], value["plan"])
     if value["status"] == "failed" and (value["result"] is not None or not isinstance(value["error"], str) or not value["error"]):
         raise ValueError("failed responses require a nonempty error and null result")
     return dict(value)
@@ -473,14 +486,14 @@ def experiment_spec_contract() -> dict[str, Any]:
                 template: sorted(_KEYWORDS[template]) for template in sorted(_KEYWORDS)
             },
             "default_template": "future-prediction",
-            "world_count": OBJECT_COUNT,
+            "object_count": OBJECT_COUNT,
             "intervention_exact_keys": sorted(INTERVENTION_FIELDS),
             "intervention_kinds": list(INTERVENTIONS),
             "requested_output_order": list(OUTPUT_ORDER),
             "limits_exact_keys": sorted(LIMIT_FIELDS),
             "limits": _limits(),
             "confirmation_rows": {
-                "World": ["template_id", "world_count", "seed"],
+                "World": ["template_id", "object_count", "seed"],
                 "Observe": ["observed_steps"],
                 "Change": ["intervention"],
                 "Predict": ["prediction_horizon", "requested_outputs"],
