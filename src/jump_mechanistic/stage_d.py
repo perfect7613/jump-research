@@ -643,7 +643,7 @@ def _verify_scrambled_injection(
     return world_sha, raw_sha
 
 
-def _validate_seed_and_indices(seed: Any, indices: Any, *, element_count: int = 16) -> None:
+def _validate_seed_and_indices(seed: Any, indices: Any, *, element_count: int) -> None:
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 0xFFFFFFFF:
         raise ValueError("Stage D permutation seed must be a uint32")
     if (

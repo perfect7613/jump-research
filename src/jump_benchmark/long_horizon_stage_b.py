@@ -18,6 +18,7 @@ from jump_contracts import (
     learned_decoder_identity,
     seal_learned_latent_result,
     seal_result_envelope,
+    tensor_bytes_sha256,
     write_task_evidence,
 )
 from jump_mechanistic.stage_d import (
@@ -83,12 +84,17 @@ def stage_b_manifest() -> dict[str, Any]:
         "execution_lineage": {
             "state": "recovery",
             "recovery_of": {
-                "prior_manifest_sha256": "00e9457c867b0f2bc7447a8ee59ca4c115d3077a23fd267289a7d2fa467c24bc",
-                "failed_call_ids": ["fc-01KZXKWCAJ90TG4WY6YNNK3M7X"],
-                "partial_inventory_sha256": "f403eace892042c891e4c04050bf1137b8f6044b9dd4e94fcd19f2046de2e1ae",
-                "failure_reason": "shared Stage-D scrambled-z verifier was limited to 16 float32 elements while corrected z is 32D",
+                "prior_manifest_sha256": "12779307505f4bc9abf8542acb54cc4ead86c749c504e2974e6f145bf731c231",
+                "failed_call_ids": ["fc-01KZXMBB0J4W584XNAANZTC415"],
+                "partial_inventory_sha256": "44c8ce9de35c5029cfeb33c996603f4f3b7e3f29be4e20ca39a22b60225e94df",
+                "failure_reason": "persistent nontextual injection producer retained a 16D serializer assertion while corrected z is 32D",
                 "source_outputs_reused": False,
                 "source_root_mutated": False,
+            },
+            "prior_failed_partial": {
+                "manifest_sha256": "00e9457c867b0f2bc7447a8ee59ca4c115d3077a23fd267289a7d2fa467c24bc",
+                "call_id": "fc-01KZXKWCAJ90TG4WY6YNNK3M7X",
+                "partial_inventory_sha256": "f403eace892042c891e4c04050bf1137b8f6044b9dd4e94fcd19f2046de2e1ae",
             },
         },
         "claim_label": "Phase B paired frozen-Gemma injection engineering study; no causal or mechanistic claim",
@@ -164,6 +170,9 @@ STAGE_B_MANIFEST_SHA256 = sha256_json(stage_b_manifest())
 def dynamic_32d_control_preflight() -> dict[str, Any]:
     """Exercise the actual six-arm executor with independently sealed 32D tensors."""
     import struct
+    import torch
+
+    from .authentic_stage_d import persistent_z_injection
 
     checkpoint = "stage-b-" + "4" * 64
     worlds = {"a": "world-a", "b": "world-b", "w": "world-wrong"}
@@ -231,7 +240,35 @@ def dynamic_32d_control_preflight() -> dict[str, Any]:
     )
     result = execute_stage_d_control_set(spec, arm_inputs)
     result.verify()
-    return {"arms": len(result.arms), "latent_dim": LATENT_DIM, "scrambled_differs": raw_s != raw["a"], "content_sha256": result.content_sha256}
+
+    class _DummyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedding = torch.nn.Embedding(8, 12)
+
+        def get_input_embeddings(self):
+            return self.embedding
+
+    dummy = _DummyModel()
+    projector = build_gated_residual_projector(12, latent_dim=LATENT_DIM)
+    latent = torch.frombuffer(bytearray(raw["a"]), dtype=torch.float32).reshape(1, LATENT_DIM)
+    with persistent_z_injection(dummy, projector, latent, enabled=True) as binding:
+        dummy.get_input_embeddings()(torch.tensor([[1, 2]], dtype=torch.long))
+        dummy.get_input_embeddings()(torch.tensor([[3]], dtype=torch.long))
+    if binding["forward_calls"]["count"] != 2:
+        raise RuntimeError("32D persistent injection did not execute on every forward")
+    if binding["world_latent_sha256"] != tensor_bytes_sha256(
+        raw["a"], dtype="float32-le", shape=[1, LATENT_DIM], order="C"
+    ):
+        raise RuntimeError("32D persistent injection tensor binding mismatch")
+    return {
+        "arms": len(result.arms),
+        "latent_dim": LATENT_DIM,
+        "scrambled_differs": raw_s != raw["a"],
+        "persistent_injection_forward_calls": binding["forward_calls"]["count"],
+        "persistent_injection_sha256": binding["world_latent_sha256"],
+        "content_sha256": result.content_sha256,
+    }
 
 
 def _episode(seed: int, split: str) -> dict[str, Any]:

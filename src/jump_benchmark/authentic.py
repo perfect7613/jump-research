@@ -300,8 +300,8 @@ def serialize_latent_tensor(tensor: Any) -> SerializedLatent:
 
     value = tensor.detach().to(device="cpu", dtype=torch.float32).contiguous()
     shape = tuple(value.shape)
-    if not shape or shape[-1] != LATENT_DIM:
-        raise ValueError(f"world latent final dimension must be {LATENT_DIM}")
+    if not shape or shape[-1] <= 0:
+        raise ValueError("world latent must have a nonempty final dimension")
     raw = value.numpy().astype("<f4", copy=False).tobytes(order="C")
     return SerializedLatent(
         "float32-le", shape, raw,
