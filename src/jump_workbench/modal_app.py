@@ -32,13 +32,18 @@ def _code_version() -> str:
 CODE_VERSION = _code_version()
 simulator_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("jsonschema==4.26.0")
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
 gateway_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("fastapi[standard]==0.116.1", "jsonschema==4.26.0")
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
+visual_simulator_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("jsonschema==4.26.0")
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
@@ -90,7 +95,7 @@ def execute_restricted_simulation(
 
 
 @app.function(
-    image=simulator_image,
+    image=visual_simulator_image,
     cpu=1.0,
     memory=512,
     timeout=60,
