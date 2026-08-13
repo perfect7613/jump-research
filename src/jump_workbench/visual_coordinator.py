@@ -240,6 +240,18 @@ def _validate_revision(value: Any) -> dict[str, Any]:
 def _complete_nullable_spec_fields(generated: dict[str, Any]) -> dict[str, Any]:
     """Materialize required nullable keys; never infer an operation or value."""
     value = dict(generated)
+    world = dict(value["world"])
+    world["entities"] = [
+        {
+            **item,
+            "initial_state": {
+                "numeric": item["initial_state"].get("numeric", {}),
+                "categorical": item["initial_state"].get("categorical", {}),
+            },
+        }
+        for item in world["entities"]
+    ]
+    value["world"] = world
     dynamics = dict(value["dynamics"])
     dynamics["rules"] = [
         {**item, "target_type": item.get("target_type")}
