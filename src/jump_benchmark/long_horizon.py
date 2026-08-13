@@ -46,7 +46,7 @@ from .simulator import EpisodeSpec, SimulatorConfig, derive_seed, generate_episo
 from .task_adapter import write_track_h_task_evidence
 
 
-LONG_HORIZON_SCHEMA_VERSION = "jump.track-h-long-horizon-manifest/v2"
+LONG_HORIZON_SCHEMA_VERSION = "jump.track-h-long-horizon-manifest/v3"
 LONG_HORIZON_RESULT_VERSION = "jump.track-h-long-horizon-result/v1"
 FUTURE_HORIZON = 8
 LATENT_DIM = 32
@@ -90,7 +90,7 @@ def long_horizon_manifest(mode: str) -> dict[str, Any]:
     seeds = [120731] if pilot else [120731, 120732, 120733]
     return {
         "schema_version": LONG_HORIZON_SCHEMA_VERSION,
-        "experiment_id": f"track-h-long-horizon-residual-{mode}-v2",
+        "experiment_id": f"track-h-long-horizon-same-z-residual-{mode}-v3",
         "phase": "A",
         "mode": mode,
         "architecture_attempt": 2,
@@ -102,6 +102,11 @@ def long_horizon_manifest(mode: str) -> dict[str, Any]:
             "diagnosis": "absolute-state decoder underperformed copy-last persistence on both untouched splits",
             "source_outputs_reused": False,
             "source_root_mutated": False,
+            "predictive_only_intermediate": {
+                "pilot_call_id": "fc-01KZXJS8BN7XQ842P5V4F4479P",
+                "replication_call_id": "fc-01KZXJYK7G94QK70M8NHN5WG39",
+                "disposition": "predictive metrics retained; not eligible for Phase B because last visible state bypassed serialized z",
+            },
         },
         "claim_label": "observation-only predictive engineering study; no behavioral, causal, or mechanistic claim",
         "input": {
@@ -130,11 +135,13 @@ def long_horizon_manifest(mode: str) -> dict[str, Any]:
             ),
         },
         "model": {
-            "encoder": "flatten(4x6x4)->Linear(96,128)->GELU->Linear(128,64)->GELU->Linear(64,32)",
-            "decoder": "zero-initialized residual: Linear(32,128)->GELU->Linear(128,256)->GELU->Linear(256,8x6x2), added to last observed positions",
+            "encoder": "observation-only structured 32D z: 12 exact last-visible position coordinates plus learned Linear(96,128)->GELU->Linear(128,64)->GELU->Linear(64,20)",
+            "decoder": "same-z-only zero-initialized residual: repeat z[0:12] across horizon plus Linear(32,128)->GELU->Linear(128,256)->GELU->Linear(256,8x6x2)",
             "latent_dim": LATENT_DIM,
-            "objective": "future-position MSE after adding predicted displacement residual to last visible positions, plus 1e-5 mean-squared-z bottleneck penalty",
+            "objective": "future-position MSE from decoder(serialized z) only, plus 1e-5 mean-squared learned-z tail penalty",
             "relation_or_law_supervision": False,
+            "decoder_external_observation_input": False,
+            "decoder_output_is_function_of_z_and_frozen_weights_only": True,
             "steps": 1800 if pilot else 3200,
             "batch_size": 128,
             "learning_rate": 0.0005,
@@ -182,31 +189,50 @@ def manifest_sha256(mode: str) -> str:
 def build_long_horizon_modules():
     import torch
 
-    encoder = torch.nn.Sequential(
-        torch.nn.Flatten(),
-        torch.nn.Linear(96, 128),
-        torch.nn.GELU(),
-        torch.nn.Linear(128, 64),
-        torch.nn.GELU(),
-        torch.nn.Linear(64, LATENT_DIM),
-    )
-    decoder = torch.nn.Sequential(
-        torch.nn.Linear(LATENT_DIM, 128),
-        torch.nn.GELU(),
-        torch.nn.Linear(128, 256),
-        torch.nn.GELU(),
-        torch.nn.Linear(256, FUTURE_HORIZON * 6 * 2),
-    )
-    torch.nn.init.zeros_(decoder[-1].weight)
-    torch.nn.init.zeros_(decoder[-1].bias)
+    class ObservationEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.learned = torch.nn.Sequential(
+                torch.nn.Flatten(),
+                torch.nn.Linear(96, 128),
+                torch.nn.GELU(),
+                torch.nn.Linear(128, 64),
+                torch.nn.GELU(),
+                torch.nn.Linear(64, LATENT_DIM - 12),
+            )
+
+        def forward(self, observations):
+            visible_last_positions = observations[:, -1, :, :2].reshape(observations.shape[0], 12)
+            return torch.cat([visible_last_positions, self.learned(observations)], dim=-1)
+
+    class SameZResidualDecoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.residual = torch.nn.Sequential(
+                torch.nn.Linear(LATENT_DIM, 128),
+                torch.nn.GELU(),
+                torch.nn.Linear(128, 256),
+                torch.nn.GELU(),
+                torch.nn.Linear(256, FUTURE_HORIZON * 6 * 2),
+            )
+            torch.nn.init.zeros_(self.residual[-1].weight)
+            torch.nn.init.zeros_(self.residual[-1].bias)
+
+        def forward(self, z):
+            baseline = z[:, :12].reshape(-1, 1, 6, 2).expand(-1, FUTURE_HORIZON, -1, -1)
+            residual = self.residual(z).reshape(-1, FUTURE_HORIZON, 6, 2)
+            return (baseline + residual).reshape(-1, FUTURE_HORIZON * 6 * 2)
+
+    encoder = ObservationEncoder()
+    decoder = SameZResidualDecoder()
     return encoder, decoder
 
 
 def _predict(encoder: Any, decoder: Any, inputs: Any):
     z = encoder(inputs)
-    residual = decoder(z).reshape(-1, FUTURE_HORIZON, 6, 2)
-    persistence = inputs[:, -1, :, :2].unsqueeze(1).expand_as(residual)
-    return z, persistence + residual, persistence
+    prediction = decoder(z).reshape(-1, FUTURE_HORIZON, 6, 2)
+    persistence = inputs[:, -1, :, :2].unsqueeze(1).expand_as(prediction)
+    return z, prediction, persistence
 
 
 def _record(episode: dict[str, Any], split: str) -> dict[str, Any]:
@@ -345,7 +371,7 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
     for step in range(steps):
         indices = torch.randint(train_x.shape[0], (batch_size,), generator=generator, device=device)
         z, prediction, _ = _predict(encoder, decoder, train_x[indices])
-        loss = torch.nn.functional.mse_loss(prediction, train_y[indices]) + 1e-5 * z.square().mean()
+        loss = torch.nn.functional.mse_loss(prediction, train_y[indices]) + 1e-5 * z[:, 12:].square().mean()
         if not torch.isfinite(loss):
             raise RuntimeError("non-finite longer-horizon predictive loss")
         if initial_loss is None:
@@ -383,7 +409,10 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
     observation = ObservationArtifact.from_payload(row["encoder_input"])
     latent = serialize_long_horizon_latent(metrics["heldout_law_ood"]["first_latent"])
     latent_copy_1 = bytes(latent.data); latent_copy_2 = memoryview(bytes(latent.data))
-    predicted_final = metrics["heldout_law_ood"]["first_prediction"][-1]
+    exact_z = torch.frombuffer(bytearray(latent.data), dtype=torch.float32).to(device).reshape(1, LATENT_DIM)
+    with torch.no_grad():
+        exact_prediction = decoder(exact_z).reshape(FUTURE_HORIZON, 6, 2).detach().cpu().tolist()
+    predicted_final = exact_prediction[-1]
     svg = render_predicted_state_svg(predicted_final, latent.sha256).encode()
     (output_root / "encoder-observation.f32le.bin").write_bytes(observation.bytes())
     (output_root / "world-latent.f32le.bin").write_bytes(latent.data)
@@ -409,11 +438,13 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
         decoded_image=svg,
         decoded_image_media_type="image/svg+xml",
         answer={
-            "predicted_future_positions": metrics["heldout_law_ood"]["first_prediction"],
+            "predicted_future_positions": exact_prediction,
             "producer_bindings": {
                 "encoder_artifact_sha256": encoder_weights_sha,
                 "encoder_training_manifest_sha256": manifest_sha256(manifest["mode"]),
                 "source_observation_sha256": observation.sha256(),
+                "decoder_external_observation_input": False,
+                "decoder_input_world_latent_sha256": latent.sha256,
                 "code_sha": code_sha,
             },
         },
