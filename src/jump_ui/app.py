@@ -16,11 +16,11 @@ from .flow import (
 )
 from .presentation import plan_html, result_sections
 
-QUESTION = "What do you want to test in this six-object world?"
+QUESTION = "What should the dots do differently?"
 EXAMPLES = (
-    "Make matching objects repel instead of attract.",
-    "Swap what World A learned into World B.",
-    "Test whether the old force rule still fits.",
+    "Make matching dots push apart.",
+    "Swap the hidden groups between two scenes.",
+    "Check whether the old rule is wrong.",
 )
 
 CSS = """
@@ -74,8 +74,8 @@ def _friendly_error(message: str) -> str:
     lowered = message.lower()
     if any(word in lowered for word in ("url", "uri", "path", "code", "shell", "control", "ambiguous")):
         return (
-            "That request doesn’t fit this six-object world. Try changing motion, "
-            "hidden groups, attraction or repulsion, force strength, or a World A/World B swap."
+            "That request doesn’t fit this dot experiment. Try changing how the dots move, "
+            "which dots secretly belong together, or whether they push or pull."
         )
     return message
 
@@ -149,28 +149,27 @@ def create_app(*, backend=None, enable_queue: bool = True):
             gr.update(value=details, visible=True),
         )
 
-    with gr.Blocks(title="JUMP — test an idea in a tiny physics world") as demo:
+    with gr.Blocks(title="JUMP — can an AI discover a hidden rule?") as demo:
         planned_state = gr.State(None)
 
         gr.HTML(
-            '<header class="jump-shell"><p class="jump-kicker">JUMP · six-object physics</p>'
-            '<h1 class="jump-title">Test an idea in a tiny physics world.</h1>'
-            '<p class="jump-deck">Describe a bounded experiment with six moving objects. '
-            'JUMP turns it into a safe plan, runs it, and shows what happened.</p>'
-            '<p class="scope-note">Engineering demo only. The current Stage D result was null: '
-            'the learned world state did not improve or shift the frozen model’s answer. '
-            'This is not evidence of an informative representation or mechanism.</p>'
+            '<header class="jump-shell"><p class="jump-kicker">JUMP · hidden-rule challenge</p>'
+            '<h1 class="jump-title">Can an AI discover a hidden rule?</h1>'
+            '<p class="jump-deck">Watch a few dots move. Some secretly belong together. '
+            'Change how they push or pull, then see whether the AI can predict what happens.</p>'
+            '<p class="scope-note">The demo runs end to end, but the current model is still '
+            'learning the hidden rule.</p>'
             + (
                 f'<p class="fixture-banner">{backend.label} · for local contract and visual QA only</p>'
                 if not backend.is_live
-                else f'<p class="fixture-banner">{backend.label}</p>'
+                else ""
             )
             + '</header>'
         )
         intent = gr.Textbox(
             label=QUESTION,
-            placeholder="For example: What changes if objects that used to attract each other begin to repel?",
-            info="Six objects only · no code, links, files, or real-world tasks · 600 characters max",
+            placeholder="For example: Make matching dots push apart.",
+            info="Dot experiments only · no code, links, files, or real-world tasks · 600 characters max",
             lines=4,
             max_lines=7,
             elem_classes=["jump-input"],

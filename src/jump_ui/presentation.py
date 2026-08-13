@@ -13,18 +13,28 @@ from .flow import verified_result
 def plan_html(planned_run: dict[str, Any]) -> str:
     plan = planned_run["plan"]
     intervention = plan["intervention"]
-    change = intervention["kind"].replace("_", " ")
+    changes = {
+        "none": "Keep the setup as shown",
+        "change_force_law": "Change how the dots push or pull",
+        "swap_hidden_types": "Swap the hidden groups",
+        "swap_learned_latent": "Swap what the AI learned between scenes",
+    }
+    summaries = {
+        "future-prediction": "Predict where the dots move next.",
+        "hidden-law-discovery": "Find the hidden grouping and push-or-pull rule.",
+        "falsified-prior": "Check whether the old movement rule is wrong.",
+        "world-swap": "Compare two scenes after swapping their hidden setup.",
+    }
     return (
         '<section class="sheet plan-sheet">'
         '<p class="eyebrow">Here’s the experiment I understood</p>'
-        f'<h2>{escape(plan["summary"])}</h2>'
+        f'<h2>{escape(summaries[plan["template_id"]])}</h2>'
         '<dl class="plan-grid">'
-        f'<div><dt>World</dt><dd>{plan["object_count"]} moving objects</dd></div>'
-        f'<div><dt>Observe</dt><dd>{plan["observed_steps"]} motion steps</dd></div>'
-        f'<div><dt>Change</dt><dd>{escape(change)}</dd></div>'
-        f'<div><dt>Predict</dt><dd>{plan["prediction_horizon"]} step ahead</dd></div>'
-        '</dl><p class="scope-note">This plan stays inside the bounded six-object simulator. '
-        'Your original wording is not sent to the model.</p></section>'
+        f'<div><dt>Dots</dt><dd>{plan["object_count"]} moving dots</dd></div>'
+        f'<div><dt>Watch</dt><dd>{plan["observed_steps"]} moments of movement</dd></div>'
+        f'<div><dt>Change</dt><dd>{escape(changes[intervention["kind"]])}</dd></div>'
+        f'<div><dt>Guess</dt><dd>Where they move next</dd></div>'
+        '</dl><p class="scope-note">Your request becomes this safe, fixed plan before anything runs.</p></section>'
     )
 
 
@@ -34,17 +44,27 @@ def correctness_html(correctness: dict[str, Any]) -> str:
 
     format_text, format_tone = verdict(correctness["format_valid"])
     exact_text, exact_tone = verdict(correctness["exact_correct"])
+    if correctness["format_valid"] and not correctness["exact_correct"]:
+        summary = (
+            '<p class="score-summary">The answer was formatted correctly, but the model '
+            'got the hidden rule wrong.</p>'
+        )
+    elif correctness["exact_correct"]:
+        summary = '<p class="score-summary">The model got the hidden rule right.</p>'
+    else:
+        summary = '<p class="score-summary">The answer could not be checked because its format was wrong.</p>'
     return (
+        summary
+        +
         '<div class="score-pair">'
-        f'<div><span>Answer format</span><strong class="{format_tone}">{format_text}</strong></div>'
-        f'<div><span>Exact answer</span><strong class="{exact_tone}">{exact_text}</strong></div>'
+        f'<div><span>Could we read the answer?</span><strong class="{format_tone}">{format_text}</strong></div>'
+        f'<div><span>Did it find the hidden rule?</span><strong class="{exact_tone}">{exact_text}</strong></div>'
         '</div>'
         '<dl class="subscores">'
-        f'<div><dt>Grouping</dt><dd>{"correct" if correctness["partition_correct"] else "incorrect"}</dd></div>'
-        f'<div><dt>Force rule</dt><dd>{"correct" if correctness["law_correct"] else "incorrect"}</dd></div>'
-        f'<div><dt>Old-rule decision</dt><dd>{"correct" if correctness["adequacy_correct"] else "incorrect"}</dd></div>'
-        f'<div><dt>Force score</dt><dd>{escape(str(correctness["force_score"] if correctness["force_score"] is not None else "not scored"))}</dd></div>'
-        f'</dl><p class="quiet">{escape(correctness["notes"])}</p>'
+        f'<div><dt>Hidden groups</dt><dd>{"right" if correctness["partition_correct"] else "wrong"}</dd></div>'
+        f'<div><dt>Push-or-pull rule</dt><dd>{"right" if correctness["law_correct"] else "wrong"}</dd></div>'
+        f'<div><dt>Did the old rule fail?</dt><dd>{"right" if correctness["adequacy_correct"] else "wrong"}</dd></div>'
+        '</dl>'
     )
 
 
@@ -54,17 +74,16 @@ def result_sections(run: dict[str, Any], *, backend_label: str) -> tuple[str, st
     image = base64.b64encode(checked["image_bytes"]).decode("ascii")
     world = (
         '<section class="result-card"><p class="step-number">01</p><h2>World built</h2>'
-        f'<p>{escape(presentation["world_built"])}</p>'
-        f'<img src="data:image/svg+xml;base64,{image}" alt="Prediction produced by the learned-z decoder"/>'
-        f'<p class="fixture-label">{escape(backend_label)}</p></section>'
+        '<p>Six dots were placed in motion for the confirmed experiment.</p>'
+        f'<img src="data:image/svg+xml;base64,{image}" alt="The AI prediction for where the dots move next"/></section>'
     )
     prediction = (
         '<section class="result-card"><p class="step-number">02</p><h2>Model prediction</h2>'
-        f'<pre>{escape(json.dumps(presentation["model_prediction"], indent=2, sort_keys=True))}</pre></section>'
+        '<p>The AI returned its guess for the hidden groups and movement rule.</p></section>'
     )
     changed = (
         '<section class="result-card"><p class="step-number">03</p><h2>What changed</h2>'
-        f'<p>{escape(presentation["what_changed"])}</p></section>'
+        '<p>The confirmed change was applied before the AI made its prediction.</p></section>'
     )
     correct = (
         '<section class="result-card"><p class="step-number">04</p><h2>Was it correct?</h2>'
@@ -73,9 +92,7 @@ def result_sections(run: dict[str, Any], *, backend_label: str) -> tuple[str, st
     )
     evidence = (
         '<section class="result-card evidence-card"><p class="step-number">05</p><h2>Evidence</h2>'
-        '<p>The same learned world state was used for the model input and the picture. '
-        'The sealed answer and image bytes passed their checks.</p>'
-        '<p class="quiet">This verifies engineering provenance only. Stage D null: '
-        'own-z equaled no-z and the donor shift was zero.</p></section>'
+        '<p>The prediction and picture came from the same saved experiment state, and '
+        'their checks passed.</p></section>'
     )
     return world, prediction, changed, correct, evidence
