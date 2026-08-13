@@ -452,7 +452,6 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
         "claim_label": manifest["claim_label"],
         "artifact_verification": "pending",
     }
-    _write_json(output_root / "seed-terminal.json", terminal)
     check_encoder, check_decoder = build_long_horizon_modules()
     check_encoder.load_state_dict(load_file(output_root / "encoder.safetensors"), strict=True)
     check_decoder.load_state_dict(load_file(output_root / "decoder.safetensors"), strict=True)
@@ -462,6 +461,7 @@ def _run_seed(*, seed: int, manifest: dict[str, Any], output_root: Path, code_sh
     verify_latent_tensor_bytes(evidence, latent.data)
     verify_decoded_image_bytes(evidence, svg)
     terminal["artifact_verification"] = "passed"
+    _write_json(output_root / "seed-terminal.json", terminal)
     return terminal
 
 
