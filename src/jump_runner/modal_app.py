@@ -629,6 +629,19 @@ def authentic_stage_d_live():
     return build_live_app(cache_root=Path("/hf-cache"), commit_cache=stage_d_live_cache.commit)
 
 
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    name="authentic_stage_d_live_http_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_stage_d_live_http_preflight() -> dict[str, Any]:
+    from jump_runner.stage_d_live import http_boundary_preflight
+
+    return http_boundary_preflight()
+
+
 @app.local_entrypoint(name="submit-stage-c")
 def submit_stage_c(
     expected_manifest_sha256: str,
