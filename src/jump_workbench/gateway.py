@@ -62,6 +62,24 @@ def build_general_gateway(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/v2/thought-experiments/spec")
+    async def visual_spec(request: Request) -> dict[str, Any]:
+        authorize(request)
+        body = await read_body(request)
+        try:
+            return await run_action("visual_spec", body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v2/thought-experiments/confirm")
+    async def visual_confirm(request: Request) -> dict[str, Any]:
+        authorize(request)
+        body = await read_body(request)
+        try:
+            return await run_action("visual_confirm", body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return app
 
 

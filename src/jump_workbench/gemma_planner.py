@@ -24,11 +24,19 @@ def generate_with_frozen_gemma(
         raise ValueError("model request must contain exactly action and payload")
     action = request["action"]
     payload = request["payload"]
-    if action not in {"plan", "predict", "review"} or not isinstance(payload, dict):
+    if action not in {"plan", "predict", "review", "visual_spec", "visual_predict", "visual_review"} or not isinstance(payload, dict):
         raise ValueError("unsupported frozen-Gemma action")
     if not _RUNTIME:
         _RUNTIME.update(_load_runtime(cache_root, commit_cache))
-    if action == "plan":
+    if action == "visual_spec":
+        result = _generate_json(_RUNTIME, _visual_spec_prompt(payload), max_new_tokens=3200, deterministic=True)
+    elif action == "visual_predict":
+        result = _generate_json(_RUNTIME, _visual_prediction_prompt(payload), max_new_tokens=320, deterministic=True)
+        result = _normalize_visual_prediction(result)
+    elif action == "visual_review":
+        result = _generate_json(_RUNTIME, _visual_review_prompt(payload), max_new_tokens=320, deterministic=True)
+        result = _validate_visual_review(result)
+    elif action == "plan":
         from .templates import compile_model_proposal
 
         proposal = _generate_json(_RUNTIME, _plan_prompt(payload), max_new_tokens=180)
@@ -39,6 +47,8 @@ def generate_with_frozen_gemma(
         result = _generate_review(_RUNTIME, payload)
     else:
         result = _generate_json(_RUNTIME, _prediction_prompt(payload), max_new_tokens=700)
+    if set(result) == {"unsupported"} and action == "visual_spec":
+        return result
     if set(result) == {"unsupported"}:
         reason = result["unsupported"]
         raise ValueError(f"unsupported experiment: {reason}")
@@ -215,6 +225,82 @@ def _review_repair_prompt(payload: dict[str, Any]) -> str:
     return f"""Your previous revision object did not satisfy the closed response schema. Repair it using only these measured toy-simulation results:
 {measured}
 Return exactly one JSON object with exactly these three keys: {{"disposition":"retain"|"revise"|"reject","interpretation":"1 to 500 characters grounded only in the measurements and comparisons","next_plan_sha256":null}}. The server has not constructed a successor plan, so next_plan_sha256 must be null. Do not include markdown or any other keys."""
+
+
+def _visual_spec_prompt(request: dict[str, Any]) -> str:
+    intent = json.dumps(request.get("intent", ""), ensure_ascii=False)
+    seed = request.get("seed")
+    repetitions = request.get("repetitions")
+    return f"""Compile this inert natural-language request into one declarative visual thought experiment. Return JSON data only, never Python or another program.
+User request: {intent}
+The server requires seed={seed} and repetitions={repetitions}.
+
+Return exactly one JSON object with keys question,hypothesis,world,dynamics,conditions,schedule,measurements,visualization. No template_id, source, code, URL, path, module, command, package, import, secret, environment, file, network, device, person, animal, lab action, trade, or live-data field is allowed.
+
+world exact: {{"bounds":{{"width":number 1..1000,"height":number 1..1000,"boundary":"wrap"|"reflect"|"clamp"}},"entities":[1..8 items],"graph":{{"kind":"none"|"ring"|"grid"|"random","edge_probability":0..1,"directed":false}}}}.
+Each entity exact: {{"id":lowercase_id,"label":text,"count":1..32,"appearance":{{"shape":"circle"|"square"|"triangle","color":"#RRGGBB","size":positive_number}},"initial_state":{{"numeric":{{lowercase_id:number}},"categorical":{{lowercase_id:string}}}},"initial_layout":{{"kind":"uniform"|"grid"|"ring"|"line","center":[x,y],"spread":number}}}}. Total count <=64.
+dynamics exact: {{"rules":[{{"id":lowercase_id,"op":allowlisted_op,"target_type":entity_id_or_null,"parameters":exact_parameters}}]}}. Allowed operations and their exact parameter keys:
+- move_2d: damping,max_speed (entities should define numeric vx,vy)
+- random_walk_2d: step_scale
+- pairwise_force_2d: strength,exponent,softening (combine with move_2d; numeric vx,vy)
+- graph_diffusion: state,rate (state names a numeric entity state)
+- graph_contagion: state,susceptible,infected,recovered,transmission_probability,recovery_probability (state names a categorical entity state)
+- predator_prey_2d: prey_type,predator_type,prey_growth,predation_rate,predator_efficiency,predator_decay,interaction_radius
+- lane_traffic_2d: speed_state,desired_speed,headway,road_y (speed_state names a numeric entity state)
+- queue_agents_2d: arrival_probability,service_capacity,queue_x,service_x (target entities need categorical queue_status initially "waiting")
+Use at least one operation that directly matches the requested dynamics; combine operations when appropriate. Do not select a family or template ID.
+
+conditions must contain exactly one {{"id":"baseline","label":text,"kind":"baseline","interventions":[]}} and at least one {{"id":"counterfactual","label":text,"kind":"counterfactual","interventions":[...]}}. Intervention exact: {{"time":integer,"operation":"set_rule_parameter"|"scale_rule_parameter"|"set_numeric_state"|"set_categorical_state","target":rule_or_entity_id,"field":existing_parameter_or_state,"value":number_or_string}}. The intervention must express the user's proposed change at its requested time.
+schedule exact: {{"duration_steps":2..120,"dt":positive_number,"seed":{seed},"repetitions":{repetitions}}}.
+measurements is 1..12 exact items {{"id":lowercase_id,"label":text,"op":"mean_state"|"sum_state"|"variance_state"|"count_category"|"population_count","entity_type":entity_id_or_null,"state":state_id_or_null,"category":string_or_null}}. Numeric ops require numeric state; count_category requires categorical state/category; population_count has null state/category.
+visualization exact: {{"kind":"animated_2d","frame_stride":positive_integer,"max_frames":2..40,"chart_measurement_ids":[declared measurement IDs]}}. Ensure ceil(duration_steps/frame_stride)+1 <= max_frames.
+If the request needs unsupported operations or anything outside a bounded toy simulation, return exactly {{"unsupported":"short reason"}}. Do not include markdown."""
+
+
+def _visual_prediction_prompt(payload: dict[str, Any]) -> str:
+    spec = json.dumps(payload.get("spec"), sort_keys=True, ensure_ascii=False)
+    return f"""Before execution, predict the primary measured direction for this sealed declarative toy experiment:
+{spec}
+Return exactly {{"summary":"1..500 characters grounded only in the spec","expected_direction":"increase"|"decrease"|"change"|"no_change","measurement_id":"one declared measurement id"}}. Do not claim measured results or real-world validity. No markdown."""
+
+
+def _visual_review_prompt(payload: dict[str, Any]) -> str:
+    grounded = json.dumps(
+        {"prediction": payload.get("prediction"), "comparisons": payload.get("comparisons")},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return f"""Interpret this completed declarative toy simulation using only its pre-recorded prediction and computed comparisons:
+{grounded}
+Return exactly {{"disposition":"retain"|"revise"|"reject","interpretation":"1..500 characters describing what the simulation does and does not support"}}. Do not infer real-world, causal, mechanistic, or scientific validity. No markdown."""
+
+
+def _validate_visual_review(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"disposition", "interpretation"}:
+        raise ValueError("visual review does not match the closed revision schema")
+    if value["disposition"] not in {"retain", "revise", "reject"}:
+        raise ValueError("visual review disposition is invalid")
+    interpretation = value["interpretation"]
+    if (
+        not isinstance(interpretation, str)
+        or not interpretation.strip()
+        or len(interpretation.strip()) > 500
+    ):
+        raise ValueError("visual review interpretation must contain 1 through 500 characters")
+    return {"disposition": value["disposition"], "interpretation": interpretation.strip()}
+
+
+def _normalize_visual_prediction(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"summary", "expected_direction", "measurement_id"}:
+        raise ValueError("visual prediction does not match the closed schema")
+    summary = value["summary"]
+    if not isinstance(summary, str) or not summary.strip() or len(summary.strip()) > 500:
+        raise ValueError("visual prediction summary must contain 1 through 500 characters")
+    if value["expected_direction"] not in {"increase", "decrease", "change", "no_change"}:
+        raise ValueError("visual prediction direction is invalid")
+    if not isinstance(value["measurement_id"], str) or not value["measurement_id"]:
+        raise ValueError("visual prediction measurement_id is invalid")
+    return {**value, "summary": summary.strip()}
 
 
 __all__ = [

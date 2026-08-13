@@ -52,3 +52,5 @@ def test_modal_boundary_has_required_isolation_controls_and_no_mounts():
     assert "secrets=" not in decorator
     assert "volumes=" not in decorator
     assert ".pip_install(" not in source[:source.index("gateway_image")]
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    assert 'modal = ["modal>=1.3,<2"]' in pyproject
