@@ -858,6 +858,40 @@ def authentic_world_object_jepa_residual_pilot(expected_manifest_sha256:str,expe
         if result.get("status")!="completed":raise RunnerError(f"residual JEPA failed: {result.get('error')}")
         return result
 
+
+def _authorize_latent_memory_bridge(*,expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool,confirm_h100:bool)->dict[str,Any]:
+    from jump_benchmark.latent_memory_bridge import MANIFEST_SHA256,manifest
+    if confirm_paid is not True or confirm_h100 is not True:raise RunnerError("latent-memory bridge requires literal paid and H100 confirmations")
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("latent-memory bridge immutable identity mismatch")
+    e=manifest()["execution"];forecast=e["timeout_seconds"]/3600*e["h100_rate_usd_per_hour"]
+    if e["resource"]!="H100" or e["gpu_count"]!=1 or e["max_containers"]!=1 or e["max_inputs"]!=1 or e["max_attempts"]!=1 or abs(forecast-e["forecast_usd"])>1e-9 or forecast>e["aggregate_authority_ceiling_usd"]:raise RunnerError("latent-memory bridge resource/cost mismatch")
+    return e
+
+@app.function(image=stage_d_image,timeout=300,max_containers=1,volumes={str(VOLUME_PATH):volume},secrets=[modal.Secret.from_name("jump-hf-read",required_keys=["HF_TOKEN"])],name="authentic_world_latent_memory_bridge_preflight")
+@modal.concurrent(max_inputs=1)
+def authentic_world_latent_memory_bridge_preflight(expected_manifest_sha256:str,expected_code_sha:str)->dict[str,Any]:
+    import hashlib
+    from transformers import AutoConfig,AutoModelForMultimodalLM
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID,BASE_REVISION
+    from jump_benchmark.latent_memory_bridge import MANIFEST_SHA256,SOURCE_HASHES,SOURCE_ROOT,cpu_preflight
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("latent-memory bridge preflight identity mismatch")
+    source=VOLUME_PATH/SOURCE_ROOT
+    for rel,sha in SOURCE_HASHES.items():
+        if hashlib.sha256((source/rel).read_bytes()).hexdigest()!=sha:raise RunnerError(f"latent-memory source mismatch: {rel}")
+    config=AutoConfig.from_pretrained(BASE_REPO_ID,revision=BASE_REVISION,trust_remote_code=False);model_class=AutoModelForMultimodalLM._model_mapping[type(config)];seam=cpu_preflight(int(config.text_config.hidden_size))
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"model_type":config.model_type,"model_class":model_class.__name__,"seam":seam,"source_checksums_verified":True,"base_weights_loaded":False,"gpu_allocated":False,"persistent_root_created":False}
+
+@app.function(image=stage_d_image,gpu="H100",timeout=3600,max_containers=1,volumes={str(VOLUME_PATH):volume},secrets=[modal.Secret.from_name("jump-hf-read",required_keys=["HF_TOKEN"])],name="authentic_world_latent_memory_bridge")
+@modal.concurrent(max_inputs=1)
+def authentic_world_latent_memory_bridge(expected_manifest_sha256:str,expected_code_sha:str,confirm_paid:bool=False,confirm_h100:bool=False)->dict[str,Any]:
+    from jump_benchmark.latent_memory_bridge import run_contract
+    _authorize_latent_memory_bridge(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-latent-memory-bridge"/expected_manifest_sha256/"run";phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed":raise RunnerError(f"latent-memory bridge failed: {result.get('error')}")
+        return result
+
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
     mode: str,
