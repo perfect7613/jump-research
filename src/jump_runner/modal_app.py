@@ -450,6 +450,164 @@ def authentic_world_stage_c(
         return result
 
 
+def _authorize_long_horizon_launch(
+    *,
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool,
+    confirm_h100: bool,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon import long_horizon_manifest, manifest_sha256
+
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("long-horizon Phase A requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != manifest_sha256(mode) or expected_code_sha != CODE_VERSION:
+        raise RunnerError("long-horizon immutable identity mismatch")
+    execution = long_horizon_manifest(mode)["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100"
+        or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1
+        or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1
+        or execution["serial"] is not True
+        or abs(forecast - execution["forecast_usd"]) > 1e-9
+        or forecast > execution["aggregate_authority_ceiling_usd"]
+    ):
+        raise RunnerError("long-horizon resource or cost contract mismatch")
+    return execution
+
+
+@app.function(
+    image=track_h_image,
+    timeout=300,
+    max_containers=1,
+    name="authentic_world_long_horizon_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_preflight(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """Exercise the actual task/promotion seam on a tiny CPU workload."""
+    from jump_benchmark.long_horizon import manifest_sha256, run_contract
+
+    _validate_track_h_runtime()
+    if expected_manifest_sha256 != manifest_sha256(mode) or expected_code_sha != CODE_VERSION:
+        raise RunnerError("long-horizon preflight identity mismatch")
+    phase, run = run_contract(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        dry_run=True,
+    )
+    root = Path("/tmp") / "jump-long-horizon-preflight" / uuid.uuid4().hex
+    result = execute_local_run(phase, run, root, expected_manifest_sha256)
+    if result.get("status") != "completed" or result["provenance"]["code_version"] != CODE_VERSION:
+        raise RunnerError("long-horizon canonical CPU preflight failed")
+    return {
+        "status": "passed",
+        "mode": mode,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "schema_version": result["schema_version"],
+        "artifacts_promoted": len(result["artifacts"]),
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
+    gpu="H100",
+    timeout=7200,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    name="authentic_world_long_horizon",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    """Run one frozen Phase-A mode; pilot and replication have distinct roots."""
+    from jump_benchmark.long_horizon import run_contract
+
+    _validate_track_h_runtime()
+    _authorize_long_horizon_launch(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    root = VOLUME_PATH / "authentic-world-long-horizon" / expected_manifest_sha256 / "run"
+    phase, run = run_contract(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+    )
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256)
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"long-horizon task failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-long-horizon")
+def submit_long_horizon(
+    mode: str,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> None:
+    execution = _authorize_long_horizon_launch(
+        mode=mode,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    call = authentic_world_long_horizon.spawn(
+        mode,
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=True,
+        confirm_h100=True,
+    )
+    record = {
+        "app_name": APP_NAME,
+        "function": "authentic_world_long_horizon",
+        "call_id": call.object_id,
+        "mode": mode,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "forecast_usd": execution["forecast_usd"],
+        "aggregate_authority_ceiling_usd": execution["aggregate_authority_ceiling_usd"],
+    }
+    registry = Path(".jump/submissions")
+    registry.mkdir(parents=True, exist_ok=True)
+    record_path = registry / f"{call.object_id}.json"
+    with record_path.open("x") as handle:
+        handle.write(json.dumps(record, sort_keys=True, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(registry, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    print(json.dumps({**record, "record_path": str(record_path)}, sort_keys=True))
+
+
 def _authorize_stage_d_launch(
     expected_manifest_sha256: str,
     expected_code_sha: str,
