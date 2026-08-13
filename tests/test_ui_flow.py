@@ -34,11 +34,13 @@ def test_plan_confirmation_and_scope_rejection():
 
 def test_app_exposes_one_run_then_mandatory_confirmation():
     gr = pytest.importorskip("gradio")
-    from jump_ui.app import EXAMPLES, QUESTION, create_app
+    from jump_ui.app import CSS, EXAMPLES, QUESTION, create_app
 
     demo = create_app(backend=NonLiveContractFixtureBackend(), enable_queue=False)
     assert isinstance(demo, gr.Blocks)
     assert "jump-title" in demo._jump_css
+    assert "Six identical particles move across a 2D canvas" in config_text(demo)
+    assert "color: var(--ink) !important" in CSS
     config = demo.get_config_file()
     labels = {component.get("props", {}).get("label") for component in config["components"]}
     assert QUESTION in labels
@@ -52,6 +54,10 @@ def test_app_exposes_one_run_then_mandatory_confirmation():
     assert {"Run experiment", "Run this plan"} <= values
     dependencies = {dependency.get("api_name") for dependency in config["dependencies"]}
     assert {"parse_intent", "execute_plan"} <= dependencies
+
+
+def config_text(demo):
+    return str(demo.get_config_file())
 
 
 def test_live_failure_never_substitutes_a_fixture_or_recording():
