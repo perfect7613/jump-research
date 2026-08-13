@@ -205,7 +205,15 @@ def execute_local_run(
     task_config_path = attempt / "task-parameters.json"
     write_json_immutable(task_config_path, run["task"].get("parameters", {}))
 
-    inherited_keys = ("PATH", "PYTHONPATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+    inherited_keys = (
+        "PATH",
+        "PYTHONPATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "JUMP_CODE_VERSION",
+    )
     env = {key: os.environ[key] for key in inherited_keys if key in os.environ}
     env.update({key: os.environ[key] for key in secret_keys if key in os.environ})
     env.update(

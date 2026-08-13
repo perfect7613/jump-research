@@ -324,6 +324,48 @@ def authentic_world_stage_c_preflight(
 
 @app.function(
     image=track_h_image,
+    timeout=300,
+    max_containers=1,
+    name="authentic_world_stage_c_task_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_c_task_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """Run the actual allowlisted task through canonical promotion on CPU only."""
+    from jump_benchmark.authentic_stage_c import (
+        STAGE_C_MANIFEST_SHA256,
+        stage_c_run_contract,
+    )
+
+    _validate_track_h_runtime()
+    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage C task preflight identity mismatch")
+    phase, run = stage_c_run_contract(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        dry_run=True,
+    )
+    root = Path("/tmp") / "jump-stage-c-task-preflight" / expected_manifest_sha256
+    result = execute_local_run(phase, run, root, expected_manifest_sha256)
+    if result.get("status") != "completed" or result["provenance"]["code_version"] != CODE_VERSION:
+        raise RunnerError("Stage C task preflight did not reach canonical completion")
+    return {
+        "status": "passed",
+        "schema_version": result["schema_version"],
+        "code_sha": result["provenance"]["code_version"],
+        "manifest_sha256": result["provenance"]["manifest_sha256"],
+        "attempt": result["attempt"],
+        "artifacts_promoted": len(result["artifacts"]),
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+        "git_required": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
     gpu="H100",
     timeout=10_800,
     max_containers=1,
