@@ -32,6 +32,7 @@ def generate_with_frozen_gemma(
         result = _generate_json(_RUNTIME, _visual_spec_prompt(payload), max_new_tokens=3200, deterministic=True)
     elif action == "visual_predict":
         result = _generate_json(_RUNTIME, _visual_prediction_prompt(payload), max_new_tokens=320, deterministic=True)
+        result = _normalize_visual_prediction(result)
     elif action == "visual_review":
         result = _generate_json(_RUNTIME, _visual_review_prompt(payload), max_new_tokens=320, deterministic=True)
         result = _validate_visual_review(result)
@@ -277,9 +278,21 @@ def _validate_visual_review(value: Any) -> dict[str, Any]:
         raise ValueError("visual review does not match the closed revision schema")
     if value["disposition"] not in {"retain", "revise", "reject"}:
         raise ValueError("visual review disposition is invalid")
-    if not isinstance(value["interpretation"], str) or not value["interpretation"].strip() or len(value["interpretation"]) > 500:
+    if not isinstance(value["interpretation"], str) or not value["interpretation"].strip():
         raise ValueError("visual review interpretation must contain 1 through 500 characters")
-    return {"disposition": value["disposition"], "interpretation": value["interpretation"].strip()}
+    return {"disposition": value["disposition"], "interpretation": value["interpretation"].strip()[:500]}
+
+
+def _normalize_visual_prediction(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"summary", "expected_direction", "measurement_id"}:
+        raise ValueError("visual prediction does not match the closed schema")
+    if not isinstance(value["summary"], str) or not value["summary"].strip():
+        raise ValueError("visual prediction summary must be nonempty text")
+    if value["expected_direction"] not in {"increase", "decrease", "change", "no_change"}:
+        raise ValueError("visual prediction direction is invalid")
+    if not isinstance(value["measurement_id"], str) or not value["measurement_id"]:
+        raise ValueError("visual prediction measurement_id is invalid")
+    return {**value, "summary": value["summary"].strip()[:500]}
 
 
 __all__ = [
