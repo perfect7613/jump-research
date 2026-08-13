@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import shutil
@@ -11,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from jump_contracts.evidence import load_task_evidence, promote_task_artifacts
 
 from .errors import GateFailed, ManifestError, RunnerError
 from .io import atomic_write, canonical_json, sha256_file, write_json_immutable
@@ -153,47 +154,6 @@ def _write_hash_manifest(root: Path) -> None:
     write_immutable(root / "hashes.sha256", content)
 
 
-def _copy_artifacts(work_dir: Path, artifact_dir: Path, path_prefix: str) -> list[dict[str, Any]]:
-    artifact_dir.mkdir(parents=True, exist_ok=False)
-    records: list[dict[str, Any]] = []
-    for source in sorted(work_dir.rglob("*")):
-        if source.is_symlink():
-            raise RunnerError(f"task artifacts may not be symlinks: {source.relative_to(work_dir)}")
-        if not source.is_file() or source.name == "result.json":
-            continue
-        relative = source.relative_to(work_dir)
-        target = artifact_dir / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target, follow_symlinks=False)
-        records.append(
-            {
-                "name": relative.as_posix(),
-                "path": f"{path_prefix}/{relative.as_posix()}",
-                "sha256": sha256_file(target),
-                "media_type": "application/octet-stream",
-            }
-        )
-    return records
-
-
-def _validate_result(result: dict[str, Any], config: dict[str, Any]) -> None:
-    if not isinstance(result.get("metrics", []), list):
-        raise RunnerError("task result.metrics must be a list")
-    allowed_layers = set(config["preregistration"]["layer_allowlist"])
-    allowed_timepoints = set(config["preregistration"]["timepoint_allowlist"])
-    for index, metric in enumerate(result.get("metrics", [])):
-        if not isinstance(metric, dict) or not isinstance(metric.get("name"), str):
-            raise RunnerError(f"task result metric {index} needs a name")
-        if not isinstance(metric.get("value"), (int, float)):
-            raise RunnerError(f"task result metric {metric.get('name')} needs a numeric value")
-        if isinstance(metric["value"], bool) or not math.isfinite(metric["value"]):
-            raise RunnerError(f"task result metric {metric.get('name')} must be finite")
-        if "layer" in metric and metric["layer"] not in allowed_layers:
-            raise RunnerError(f"result emitted non-preregistered layer {metric['layer']!r}")
-        if "timepoint" in metric and metric["timepoint"] not in allowed_timepoints:
-            raise RunnerError(f"result emitted non-preregistered timepoint {metric['timepoint']!r}")
-
-
 def execute_local_run(
     phase: dict[str, Any], run: dict[str, Any], root: Path, manifest_sha256: str
 ) -> dict[str, Any]:
@@ -298,17 +258,21 @@ def execute_local_run(
         if error is None and exit_code == 0:
             if not task_result_path.is_file():
                 raise RunnerError("task exited successfully but did not write result.json")
-            task_result = json.loads(task_result_path.read_text())
-            if not isinstance(task_result, dict):
-                raise RunnerError("task result.json must be an object")
-            _validate_result(task_result, config)
-            artifacts = _copy_artifacts(
-                work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts"
+            task_result = load_task_evidence(
+                task_result_path,
+                allowed_layers=config["preregistration"]["layer_allowlist"],
+                allowed_timepoints=config["preregistration"]["timepoint_allowlist"],
+            )
+            artifacts = promote_task_artifacts(
+                work_dir,
+                attempt / "artifacts",
+                f"attempts/{number:04d}/artifacts",
+                task_result,
             )
             status = "completed"
         else:
             task_result = {"metrics": []}
-            artifacts = _copy_artifacts(
+            artifacts = promote_task_artifacts(
                 work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts"
             )
             status = "failed"
@@ -316,11 +280,14 @@ def execute_local_run(
         status = "failed"
         error = f"{type(exc).__name__}: {exc}"
         task_result = {"metrics": []}
-        artifacts = (
-            _copy_artifacts(work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts")
-            if not (attempt / "artifacts").exists()
-            else []
-        )
+        artifacts = []
+        if not (attempt / "artifacts").exists():
+            try:
+                artifacts = promote_task_artifacts(
+                    work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts"
+                )
+            except Exception as promotion_exc:
+                error = f"{error}; artifact promotion failed: {type(promotion_exc).__name__}"
 
     result = {
         "schema_version": "jump.run-result/v1",

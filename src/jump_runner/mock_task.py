@@ -9,6 +9,8 @@ import traceback
 import time
 from pathlib import Path
 
+from jump_contracts.evidence import artifact_declaration, write_task_evidence
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -47,8 +49,25 @@ def main() -> int:
         metric["layer"] = parameters.get("result_layer", parameters["layers"][0])
     if parameters.get("timepoints") or "result_timepoint" in parameters:
         metric["timepoint"] = parameters.get("result_timepoint", parameters["timepoints"][0])
-    (args.output_dir / "evidence.txt").write_text("deterministic CPU smoke artifact\n")
-    (args.output_dir / "result.json").write_text(json.dumps({"metrics": [metric]}) + "\n")
+    evidence_fields = parameters.get("evidence_fields", {})
+    if not isinstance(evidence_fields, dict):
+        raise ValueError("evidence_fields must be an object")
+    artifact_path = args.output_dir / "evidence.txt"
+    artifact_path.write_text("deterministic CPU smoke artifact\n")
+    write_task_evidence(
+        args.output_dir,
+        metrics=[metric],
+        artifacts=[
+            artifact_declaration(
+                artifact_path,
+                args.output_dir,
+                name="protocol-smoke-evidence",
+                media_type="text/plain",
+                role="protocol-smoke",
+            )
+        ],
+        **evidence_fields,
+    )
     print("mock task completed")
     return 0
 

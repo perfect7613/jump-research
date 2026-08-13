@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from jump_contracts.evidence import artifact_declaration, write_task_evidence
+
 from .capture import ActivationCapture, CapturePolicy
 from .interventions import (
     MatchedWorldPair,
@@ -428,9 +430,11 @@ def execute_task_file(
     if checkpoint_dir:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     payload = synthetic_suite_task(parameters, policy=policy, output_dir=target)
-    task_result = {"metrics": payload["metrics"]}
-    _write_json(target / "result.json", task_result)
-    return task_result
+    return write_task_evidence(
+        target,
+        metrics=payload["metrics"],
+        artifacts=payload["artifacts"],
+    )
 
 
 def validate_manifest_header(manifest: dict[str, Any]) -> None:
@@ -479,13 +483,13 @@ def _metric(
     metrics.append(record)
 
 
-def _artifact(path: Path, output_dir: Path) -> dict[str, str]:
-    return {
-        "name": path.stem,
-        "path": path.relative_to(output_dir).as_posix(),
-        "sha256": _sha256_bytes(path.read_bytes()),
-        "media_type": "application/x-ndjson" if path.suffix == ".jsonl" else "application/json",
-    }
+def _artifact(path: Path, output_dir: Path) -> dict[str, Any]:
+    return artifact_declaration(
+        path,
+        output_dir,
+        name=path.stem,
+        media_type="application/x-ndjson" if path.suffix == ".jsonl" else "application/json",
+    )
 
 
 def _string_list(mapping: dict[str, Any], key: str) -> list[str]:

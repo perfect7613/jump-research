@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from jump_contracts.evidence import load_verified_run_evidence, read_verified_artifact
 from jump_runner.executor import run_manifest, run_root
 from jump_runner.manifest import manifest_hash
 
@@ -26,6 +27,17 @@ def test_smoke_writes_immutable_evidence_and_skips_completed(manifest, tmp_path)
     result = json.loads(result_before)
     assert result["provenance"]["manifest_sha256"] == manifest_hash(manifest)
     assert result["artifacts"][0]["sha256"]
+    assert result["artifacts"][0]["media_type"] == "text/plain"
+    assert result["artifacts"][0]["role"] == "protocol-smoke"
+    assert load_verified_run_evidence(
+        run_dir / "result.json", expected_manifest_sha256=manifest_hash(manifest)
+    ) == result
+    _, artifact_bytes = read_verified_artifact(
+        run_dir / "result.json",
+        "protocol-smoke-evidence",
+        expected_manifest_sha256=manifest_hash(manifest),
+    )
+    assert artifact_bytes == b"deterministic CPU smoke artifact\n"
     assert (attempts_before[0] / "stdout.log").exists()
     assert (attempts_before[0] / "stderr.log").exists()
     assert (attempts_before[0] / "hashes.sha256").exists()
@@ -82,6 +94,31 @@ def test_incomplete_attempt_consumes_max_attempt_budget(manifest, tmp_path):
     assert result["status"] == "failed"
     assert result["retryable"] is False
     assert not (run_dir / "attempts/0002").exists()
+
+
+def test_promotion_failure_is_recorded_even_when_cleanup_promotion_also_fails(
+    manifest, tmp_path, monkeypatch
+):
+    import jump_runner.executor as executor
+    from jump_runner.manifest import resolve_run
+
+    def fail_promotion(*_args, **_kwargs):
+        raise RuntimeError("promotion unavailable")
+
+    monkeypatch.setattr(executor, "promote_task_artifacts", fail_promotion)
+    phase = dict(manifest["phases"][0])
+    phase["_preregistration"] = manifest["preregistration"]
+    phase["_secret_keys"] = []
+    resolved = resolve_run(manifest["defaults"], manifest["phases"][0]["runs"][0])
+    run_dir = tmp_path / "promotion-failure"
+
+    result = executor.execute_local_run(phase, resolved, run_dir, "a" * 64)
+
+    assert result["status"] == "failed"
+    assert result["artifacts"] == []
+    assert "RuntimeError: promotion unavailable" in result["error"]
+    assert "artifact promotion failed: RuntimeError" in result["error"]
+    assert json.loads((run_dir / "result.json").read_text()) == result
 
 
 @pytest.mark.parametrize("secret", ["abc", "sk-super-secret-value"])
@@ -150,3 +187,39 @@ def test_result_layer_is_revalidated(manifest, tmp_path):
     result = run_manifest(manifest, tmp_path, smoke=True)
     assert result["status"] == "stopped"
     assert result["stopped_reason"].startswith("run pilot-1 failed")
+
+
+def test_domain_recovery_lineage_survives_immutable_promotion(manifest, tmp_path):
+    lineage = {
+        "state": "recovery",
+        "recovery_of": {
+            "prior_manifest_sha256": "1" * 64,
+            "partial_inventory_sha256": "2" * 64,
+            "failed_call_ids": ["fc-failed-once"],
+            "source_outputs_reused": False,
+            "source_root_mutated": False,
+        },
+        "call_audit": [
+            {"call_id": "fc-failed-once", "disposition": "failed_partial"},
+            {"call_id": "fc-recovery-once", "disposition": "recovery"},
+            {"call_id": "fc-duplicate", "disposition": "duplicate_rejected"},
+        ],
+    }
+    bindings = {
+        "source_dataset_sha256": "3" * 64,
+        "tokenized_dataset_sha256": "4" * 64,
+    }
+    manifest["phases"][0]["runs"][0]["task"]["parameters"]["evidence_fields"] = {
+        "input_bindings": bindings,
+        "execution_lineage": lineage,
+    }
+
+    status = run_manifest(manifest, tmp_path, smoke=True)
+    assert status["status"] == "completed"
+    run_dir = run_root(tmp_path, manifest, "smoke") / "phases/pilot/runs/pilot-1"
+    result = json.loads((run_dir / "result.json").read_text())
+    assert result["input_bindings"] == bindings
+    assert result["execution_lineage"] == lineage
+    before = (run_dir / "result.json").read_bytes()
+    assert run_manifest(manifest, tmp_path, smoke=True)["status"] == "completed"
+    assert (run_dir / "result.json").read_bytes() == before

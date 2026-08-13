@@ -117,8 +117,13 @@ class RunnerIntegrationTests(unittest.TestCase):
                 output_dir=output,
                 checkpoint_dir=checkpoint,
             )
+            self.assertEqual(result["schema_version"], "jump.task-evidence/v1")
             self.assertIn("metrics", result)
             self.assertNotIn("status", result)
+            self.assertEqual(
+                {artifact["media_type"] for artifact in result["artifacts"]},
+                {"application/json", "application/x-ndjson"},
+            )
             self.assertEqual(json.loads((output / "result.json").read_text()), result)
             self.assertTrue((output / "artifacts" / "activations.jsonl").is_file())
 
