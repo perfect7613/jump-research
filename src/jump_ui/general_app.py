@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from html import escape
 import json
 import uuid
 
+from jump_workbench.workflow import QUESTION_VERSION, validate_user_intent
+
 from .app import CSS
-from .general_flow import FIXTURE_LABEL, GeneralUIError, confirm_fixture, execute_fixture, plan_rows, prepare_fixture, result_rows
+from .general_client import GeneralCoordinatorClient, GeneralCoordinatorError
+from .general_flow import plan_rows, result_rows
 from .general_presentation import EXAMPLES, QUESTION, SCOPE, hero_html, particle_research_card, plan_shell, result_shell
 
 GENERAL_CSS = CSS + """
@@ -27,38 +31,48 @@ def create_general_app():
 
     def make_plan(intent: str):
         try:
-            planned = prepare_fixture(intent, request_id="req-" + uuid.uuid4().hex[:20])
-        except GeneralUIError as exc:
-            return None, gr.update(value=f'<div class="error-copy">{exc}</div>', visible=True), gr.update(visible=False)
+            normalized = validate_user_intent(intent)
+            if len(normalized) > 600:
+                raise GeneralCoordinatorError("The question must contain 600 characters or fewer.")
+            planned = GeneralCoordinatorClient.from_environment().plan({
+                "schema_version": QUESTION_VERSION,
+                "request_id": "req-" + uuid.uuid4().hex[:20],
+                "session_id": "ui-" + uuid.uuid4().hex[:20],
+                "intent": normalized,
+                "seed": 7613,
+                "repetitions": 8,
+            })
+        except (GeneralCoordinatorError, ValueError) as exc:
+            return None, gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), gr.update(visible=False)
         return planned, gr.update(value=plan_shell(plan_rows(planned["plan"])), visible=True), gr.update(visible=True)
 
     def confirm_and_run(planned):
         if not isinstance(planned, dict):
             return gr.update(value='<div class="error-copy">Build and confirm a plan first.</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
         try:
-            prepared = confirm_fixture(planned, confirmed=True)
-            run = execute_fixture(prepared)
-            cards = result_shell(result_rows(run, prepared.plan))
+            completed = GeneralCoordinatorClient.from_environment().confirm(planned)
+            run, plan = completed["run"], completed["plan"]
+            cards = result_shell(result_rows(run, plan))
             details = json.dumps({
-                "mode": FIXTURE_LABEL, "plan_id": run["plan_id"], "run_id": run["run_id"],
+                "model": completed["model"], "plan_id": run["plan_id"], "run_id": run["run_id"],
                 "plan_sha256": run["plan_sha256"], "run_sha256": run["run_sha256"],
                 "policy_sha256": run["execution"]["policy_sha256"],
             }, indent=2, sort_keys=True)
-        except GeneralUIError as exc:
-            return gr.update(value=f'<div class="error-copy">{exc}</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
-        return gr.update(value='<p class="progress-copy">Non-live fixture complete.</p>', visible=True), *[gr.update(value=card, visible=True) for card in cards], gr.update(value=details, visible=True)
+        except (GeneralCoordinatorError, ValueError) as exc:
+            return gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
+        return gr.update(value='<p class="progress-copy">Experiment complete.</p>', visible=True), *[gr.update(value=card, visible=True) for card in cards], gr.update(value=details, visible=True)
 
     with gr.Blocks(title="JUMP — test an idea with a simulation") as demo:
         state = gr.State(None)
         gr.HTML(hero_html())
-        gr.HTML(f'<p class="fixture-banner">{FIXTURE_LABEL} · local QA only</p>')
+        gr.HTML('<p class="fixture-banner">GENERAL WORKBENCH · PLAN REVIEW REQUIRED</p>')
         question = gr.Textbox(label=QUESTION, placeholder=EXAMPLES[0], info=SCOPE, lines=4, max_lines=7, elem_classes=["jump-input"])
         gr.HTML('<p class="example-label">Try an example</p>')
         with gr.Row():
             chips = [gr.Button(value, elem_classes=["example-chip"]) for value in EXAMPLES]
         plan_button = gr.Button("Build experiment plan", elem_classes=["run-button"])
         plan_view = gr.HTML(visible=False)
-        confirm = gr.Button("Confirm prediction and run fixture", visible=False, elem_classes=["run-button"])
+        confirm = gr.Button("Confirm plan and run simulation", visible=False, elem_classes=["run-button"])
         status = gr.HTML(visible=False)
         cards = [gr.HTML(visible=False) for _ in range(5)]
         with gr.Accordion("Technical details", open=False):

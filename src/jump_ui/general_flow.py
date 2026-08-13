@@ -12,8 +12,8 @@ from jump_contracts.experiments import (
     EXPERIMENT_RUN_SCHEMA_SHA256,
     RESTRICTED_POLICY_SHA256,
     validate_experiment_plan,
-    validate_experiment_run,
 )
+from .general_client import validate_run_response
 from jump_workbench.workflow import (
     ConfirmationRequired,
     FrozenModel,
@@ -191,7 +191,7 @@ def plan_rows(plan: Mapping[str, Any]) -> dict[str, str]:
 
 def result_rows(run: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, str]:
     checked = validate_experiment_plan(plan)
-    checked_run = validate_experiment_run(run)
+    checked_run = validate_run_response(run, checked)
     if checked_run["plan_id"] != checked["plan_id"] or checked_run["plan_sha256"] != checked["plan_sha256"]:
         raise GeneralUIError("run does not bind the confirmed plan")
     relation = checked_run["execution"]["prediction"]["claims"][0]["expected_relation"]
