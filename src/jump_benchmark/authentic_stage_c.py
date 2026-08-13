@@ -1205,8 +1205,8 @@ def run_stage_c(
         if not precreated_empty_output_root or any(output_root.iterdir()):
             raise FileExistsError("immutable Stage C aggregate output root already exists")
     actual_code_sha = os.environ.get("JUMP_CODE_VERSION")
-    if not dry_run and actual_code_sha != expected_code_sha:
-        raise RuntimeError("deployed Stage C requires explicit matching JUMP_CODE_VERSION")
+    if actual_code_sha != expected_code_sha:
+        raise RuntimeError("Stage C requires explicit matching JUMP_CODE_VERSION")
     manifest = stage_c_manifest()
     seeds = manifest["initialization"]["seeds"]
     if len(seeds) != 3 or len({item["parameter_seed"] for item in seeds}) != 3 or len(

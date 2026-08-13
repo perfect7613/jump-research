@@ -61,6 +61,9 @@ def test_stage_c_small_dataset_is_seed_disjoint_with_pure_family_ood():
 
 
 def test_stage_c_cpu_dry_run_verifies_artifacts_without_scientific_decision(tmp_path):
+    import os
+
+    os.environ["JUMP_CODE_VERSION"] = "0" * 40
     arbitrary = compile_experiment_intent(
         {
             "schema_version": "jump.experiment-intent/v1",
