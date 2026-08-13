@@ -344,8 +344,15 @@ def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
     state: dict[str, Any] = {}
     request_count = {"value": 0}
 
+    def authorize(request: Request) -> None:
+        expected = os.environ.get("JUMP_MODAL_TOKEN", "")
+        supplied = request.headers.get("authorization", "")
+        if not expected or not supplied.startswith("Bearer ") or not hmac.compare_digest(supplied[7:], expected):
+            raise HTTPException(status_code=401, detail="unauthorized")
+
     @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health(request: Request) -> dict[str, Any]:
+        authorize(request)
         return {
             "status": "available",
             "schema_version": LIVE_SCHEMA_HEAD,
@@ -358,10 +365,7 @@ def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
 
     @app.post("/v1/experiment")
     async def experiment(request: Request) -> dict[str, Any]:
-        expected = os.environ.get("JUMP_MODAL_TOKEN", "")
-        supplied = request.headers.get("authorization", "")
-        if not expected or not supplied.startswith("Bearer ") or not hmac.compare_digest(supplied[7:], expected):
-            raise HTTPException(status_code=401, detail="unauthorized")
+        authorize(request)
         length = request.headers.get("content-length")
         if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
             raise HTTPException(status_code=413, detail="request body exceeds cap")
