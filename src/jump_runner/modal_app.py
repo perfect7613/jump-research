@@ -20,6 +20,12 @@ APP_NAME = os.environ.get("JUMP_MODAL_APP_NAME", "jump-sequential-experiments")
 VOLUME_NAME = os.environ.get("JUMP_MODAL_VOLUME_NAME", "jump-experiment-runs-v1")
 VOLUME_PATH = Path("/jump-runs")
 CONTROLLER_MAX_CONTAINERS = 1
+STAGE_C_REQUIRED_SUBPROCESS_ENV_KEYS = (
+    "PATH",
+    "PYTHONPATH",
+    "HOME",
+    "JUMP_CODE_VERSION",
+)
 
 
 def _code_version() -> str:
@@ -276,6 +282,11 @@ def _validate_track_h_runtime() -> dict[str, Any]:
     jsonschema_version = version("jsonschema")
     if jsonschema_version != "4.26.0":
         raise RuntimeError("Stage C image requires jsonschema==4.26.0")
+    missing = [key for key in STAGE_C_REQUIRED_SUBPROCESS_ENV_KEYS if not os.environ.get(key)]
+    if missing:
+        raise RuntimeError(f"Stage C subprocess environment is missing {missing}")
+    if os.environ["JUMP_CODE_VERSION"] != CODE_VERSION:
+        raise RuntimeError("Stage C subprocess code identity does not match deployed code")
     validate_json_schema(
         {
             "schema_version": "jump.run-result/v1",
@@ -347,7 +358,12 @@ def authentic_world_stage_c_task_preflight(
         expected_code_sha=expected_code_sha,
         dry_run=True,
     )
-    root = Path("/tmp") / "jump-stage-c-task-preflight" / expected_manifest_sha256
+    root = (
+        Path("/tmp")
+        / "jump-stage-c-task-preflight"
+        / expected_manifest_sha256
+        / uuid.uuid4().hex
+    )
     result = execute_local_run(phase, run, root, expected_manifest_sha256)
     if result.get("status") != "completed" or result["provenance"]["code_version"] != CODE_VERSION:
         raise RunnerError("Stage C task preflight did not reach canonical completion")
