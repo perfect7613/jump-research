@@ -218,13 +218,18 @@ def matched_world_pair(*, pair_seed: int, config: SimulatorConfig = SimulatorCon
         raise RuntimeError("matched pair visible prefix differs")
     if a["observations"][-1]["positions"] == b["observations"][-1]["positions"]:
         raise RuntimeError("matched pair has coincident consequence")
+    record_a, record_b = _record(a, "swap"), _record(b, "swap")
+    # Scoring targets remain sealed from encoder inputs and are exposed only
+    # after both worlds have been generated for exact Stage D evaluation.
+    record_a["scoring_target"] = a["target"]
+    record_b["scoring_target"] = b["target"]
     return {
         "schema_version": "jump.track-h-matched-world-pair/v1",
         "pair_id": hashlib.sha256(f"authentic-pair:{pair_seed}".encode()).hexdigest()[:20],
         "visible_prefix_frames": 1,
         "candidate_laws": [list(item) for item in LAW_FAMILIES],
-        "a": _record(a, "swap"),
-        "b": _record(b, "swap"),
+        "a": record_a,
+        "b": record_b,
     }
 
 
