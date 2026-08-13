@@ -45,13 +45,108 @@ from .authentic import (
     serialize_latent_tensor,
 )
 from .canonical import sha256_json
-from .experiment_spec import validate_experiment_spec
+from .experiment_spec import compile_experiment_intent, validate_experiment_spec
 from .simulator import EpisodeSpec, SimulatorConfig, derive_seed, generate_episode
 from .task_adapter import write_track_h_task_evidence
 
 
 STAGE_C_SCHEMA_VERSION = "jump.track-h-authentic-stage-c-manifest/v1"
 STAGE_C_RESULT_VERSION = "jump.track-h-authentic-stage-c-result/v1"
+
+
+def stage_c_launch_spec() -> dict[str, Any]:
+    """Return the only ExperimentSpec authorized to label Stage C training."""
+    return compile_experiment_intent(
+        {
+            "schema_version": "jump.experiment-intent/v1",
+            "intent": "Predict the future trajectory from observed motion.",
+            "session_id": "track-h-stage-c",
+            "seed": 99173,
+            "max_steps": 4,
+        }
+    )
+
+
+STAGE_C_LAUNCH_SPEC_SHA256 = sha256_json(stage_c_launch_spec())
+
+
+def authorize_stage_c_launch(
+    *,
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    actual_code_sha: str,
+    confirm_paid: bool,
+    confirm_h100: bool,
+) -> dict[str, Any]:
+    """Fail closed on the one frozen paid H100 Stage C launch contract."""
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise PermissionError("Stage C requires literal confirm_paid=true and confirm_h100=true")
+    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
+        raise ValueError("Stage C manifest hash mismatch")
+    if (
+        not isinstance(expected_code_sha, str)
+        or len(expected_code_sha) != 40
+        or any(char not in "0123456789abcdef" for char in expected_code_sha)
+        or actual_code_sha != expected_code_sha
+    ):
+        raise ValueError("Stage C code revision mismatch")
+    execution = stage_c_manifest()["execution"]
+    forecast = (
+        execution["timeout_seconds"]
+        * execution["max_attempts"]
+        / 3600
+        * execution["h100_rate_usd_per_hour"]
+    )
+    if (
+        execution["modal_function"] != "authentic_world_stage_c"
+        or execution["resource"] != "H100"
+        or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1
+        or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1
+        or execution["serial"] is not True
+        or not math.isclose(forecast, execution["retry_aware_forecast_usd"], abs_tol=1e-9)
+        or forecast > execution["hard_ceiling_usd"]
+    ):
+        raise ValueError("Stage C resource or spend contract is invalid")
+    plan = stage_c_launch_spec()
+    if sha256_json(plan) != STAGE_C_LAUNCH_SPEC_SHA256:
+        raise ValueError("Stage C canonical launch spec hash mismatch")
+    return plan
+
+
+def stage_c_run_contract(
+    *, expected_manifest_sha256: str, expected_code_sha: str, dry_run: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the fixed allowlisted runner phase/run used for canonical promotion."""
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be a boolean")
+    phase = {
+        "id": "stage-c",
+        "_secret_keys": [],
+        "_preregistration": {
+            "layer_allowlist": ["world-latent"],
+            "timepoint_allowlist": ["future-step-1"],
+        },
+    }
+    run = {
+        "id": "authentic-world-stage-c-dry" if dry_run else "authentic-world-stage-c",
+        "task": {
+            "module": "jump_benchmark.stage_c_task",
+            "parameters": {
+                "expected_manifest_sha256": expected_manifest_sha256,
+                "expected_code_sha": expected_code_sha,
+                "dry_run": dry_run,
+            },
+        },
+        "resources": {
+            "gpu": "cpu" if dry_run else "H100",
+            "timeout_seconds": 300 if dry_run else 10_800,
+        },
+        "selection": {"layers": [], "timepoints": []},
+        "retry": {"max_attempts": 1},
+    }
+    return phase, run
 
 
 def stage_c_manifest() -> dict[str, Any]:
@@ -63,6 +158,11 @@ def stage_c_manifest() -> dict[str, Any]:
             "three-seed predictive learned-latent engineering pilot; post-hoc probes are "
             "descriptive and do not establish causal or mechanistic evidence"
         ),
+        "launch_spec": {
+            "policy": "exact_canonical_training_spec_only",
+            "sha256": STAGE_C_LAUNCH_SPEC_SHA256,
+            "inference_experiment_specs_accepted": False,
+        },
         "initialization": {
             "policy": "from_scratch",
             "seeds": [
@@ -1074,6 +1174,7 @@ def run_stage_c(
     device: str = "cuda",
     checkpoint_commit: Callable[[], None] | None = None,
     dry_run: bool = False,
+    precreated_empty_output_root: bool = False,
 ) -> dict[str, Any]:
     """Run all three frozen Stage C seeds serially and write canonical evidence."""
     if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
@@ -1084,8 +1185,11 @@ def run_stage_c(
         raise ValueError("expected_code_sha must be an exact lowercase 40-hex revision")
     plan = validate_experiment_spec(experiment_spec)
     experiment_spec_sha256 = sha256_json(plan)
+    if experiment_spec_sha256 != STAGE_C_LAUNCH_SPEC_SHA256:
+        raise ValueError("Stage C requires the exact frozen canonical launch spec")
     if output_root.exists():
-        raise FileExistsError("immutable Stage C aggregate output root already exists")
+        if not precreated_empty_output_root or any(output_root.iterdir()):
+            raise FileExistsError("immutable Stage C aggregate output root already exists")
     if not dry_run:
         actual_code_sha = os.environ.get("JUMP_CODE_VERSION")
         if actual_code_sha is None:
@@ -1100,7 +1204,8 @@ def run_stage_c(
         {item["dataset_root_seed"] for item in seeds}
     ) != 3:
         raise RuntimeError("Stage C requires exactly three independent frozen seeds")
-    output_root.mkdir(parents=True, exist_ok=False)
+    if not output_root.exists():
+        output_root.mkdir(parents=True, exist_ok=False)
     aggregate_started = time.monotonic()
     seed_results: list[dict[str, Any]] = []
     for seed_config in seeds:

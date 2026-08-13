@@ -27,4 +27,3 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("xb") as handle:
         for row in rows:
             handle.write(canonical_json(row))
-
