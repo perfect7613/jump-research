@@ -243,6 +243,23 @@ class GateTests(unittest.TestCase):
                 expected_manifest_sha256=digest("manifest"),
             )
 
+    def test_authentic_swaps_reject_distinct_envelopes_with_non_mirrored_worlds(self):
+        conditions, swaps = g3_records()
+        reverse_index = next(
+            index
+            for index, row in enumerate(swaps)
+            if row.pair_id == "p-0" and row.direction == "b_to_a"
+        )
+        unrelated = copy.copy(swaps[reverse_index])
+        object.__setattr__(unrelated, "world_a_id", "unrelated-a")
+        object.__setattr__(unrelated, "world_b_id", "unrelated-b")
+        object.__setattr__(unrelated, "donor_world_id", "unrelated-b")
+        object.__setattr__(unrelated, "recipient_world_id", "unrelated-a")
+        corrupted = list(swaps)
+        corrupted[reverse_index] = unrelated
+        with self.assertRaisesRegex(ValueError, "one ordered World A/B identity"):
+            evaluate_g3(conditions, corrupted, seed=17)
+
     def test_g5_requires_all_controls_both_directions_and_sham(self):
         records = g5_records()
         result = evaluate_g5(records, seed=17)

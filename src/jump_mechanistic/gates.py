@@ -815,19 +815,31 @@ def _validate_g3_records(condition_records: Sequence[BehaviorConditionRecord], s
             "envelope_payload_sha256",
         ):
             _digest(getattr(row, field), f"G3 {field}")
-    grouped: dict[tuple[str, str], set[str]] = {}
+    grouped: dict[tuple[str, str], list[SwapOutcomeRecord]] = {}
     for row in swap_records:
-        grouped.setdefault((row.checkpoint_id, row.pair_id), set()).add(row.direction)
-    if any(directions != {"a_to_b", "b_to_a"} for directions in grouped.values()):
-        raise ValueError("G3 swaps require both directions for every pair")
-    authentic_envelopes: dict[tuple[str, str], set[str]] = {}
-    for row in swap_records:
-        if row.evidence_namespace == "authentic_learned_latent":
-            authentic_envelopes.setdefault((row.checkpoint_id, row.pair_id), set()).add(
-                row.envelope_payload_sha256
+        grouped.setdefault((row.checkpoint_id, row.pair_id), []).append(row)
+    for rows in grouped.values():
+        if len(rows) != 2 or {row.direction for row in rows} != {"a_to_b", "b_to_a"}:
+            raise ValueError("G3 swaps require exactly both directions for every pair")
+        by_direction = {row.direction: row for row in rows}
+        forward, reverse = by_direction["a_to_b"], by_direction["b_to_a"]
+        if (
+            (forward.world_a_id, forward.world_b_id)
+            != (reverse.world_a_id, reverse.world_b_id)
+            or forward.cluster_id != reverse.cluster_id
+            or (forward.donor_world_id, forward.recipient_world_id)
+            != (forward.world_a_id, forward.world_b_id)
+            or (reverse.donor_world_id, reverse.recipient_world_id)
+            != (forward.world_b_id, forward.world_a_id)
+        ):
+            raise ValueError(
+                "G3 swap pair must share one ordered World A/B identity and cluster with exact reverse lineage"
             )
-    if any(len(hashes) != 2 for hashes in authentic_envelopes.values()):
-        raise ValueError("authentic G3 pairs require two distinct mirrored sealed envelopes")
+        if (
+            forward.evidence_namespace == "authentic_learned_latent"
+            and len({row.envelope_payload_sha256 for row in rows}) != 2
+        ):
+            raise ValueError("authentic G3 pairs require two distinct mirrored sealed envelopes")
     _unique(swap_records, lambda r: (r.checkpoint_id, r.pair_id, r.direction), "G3 swap direction")
 
 
