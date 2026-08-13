@@ -585,7 +585,9 @@ def authentic_world_long_horizon_stage_b_preflight(
         SOURCE_ENCODER_SHA256,
         SOURCE_RELATIVE_ROOT,
         STAGE_B_MANIFEST_SHA256,
+        _encode,
         dynamic_32d_control_preflight,
+        matched_pair_cpu_generation_preflight,
     )
     from safetensors.torch import load_file
 
@@ -598,6 +600,13 @@ def authentic_world_long_horizon_stage_b_preflight(
     encoder, decoder = build_long_horizon_modules()
     encoder.load_state_dict(load_file(encoder_path), strict=True)
     decoder.load_state_dict(load_file(decoder_path), strict=True)
+    from jump_benchmark.authentic import matched_world_pair
+    from jump_benchmark.simulator import SimulatorConfig
+    pair = matched_world_pair(pair_seed=33173, config=SimulatorConfig(steps=12))
+    paired_z, paired_observation = _encode(encoder, pair["a"], "cpu")
+    if tuple(paired_z.shape) != (1, LATENT_DIM) or paired_observation.sha256() != pair["a"]["encoder_input_sha256"]:
+        raise RunnerError("Phase B matched-pair observation-only encoder path mismatch")
+    matched_pair_seam = matched_pair_cpu_generation_preflight(encoder, decoder, tokenizer)
     config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
     model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
     tokenizer = AutoTokenizer.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
@@ -643,6 +652,8 @@ def authentic_world_long_horizon_stage_b_preflight(
         "canonical_artifact_promotion": True,
         "source_encoder_sha256": SOURCE_ENCODER_SHA256,
         "source_decoder_sha256": SOURCE_DECODER_SHA256,
+        "matched_pair_observation_only_encode": True,
+        "matched_pair_six_arm_generation_and_scoring": matched_pair_seam,
         "base_weights_loaded": False,
         "gpu_allocated": False,
         "persistent_root_created": False,

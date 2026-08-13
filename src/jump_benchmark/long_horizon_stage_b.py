@@ -84,10 +84,10 @@ def stage_b_manifest() -> dict[str, Any]:
         "execution_lineage": {
             "state": "recovery",
             "recovery_of": {
-                "prior_manifest_sha256": "0fb190497453563cfe7ff231de2cfa90e097597ab99a9a1c856944d8ff0c0617",
-                "failed_call_ids": ["fc-01KZXMQ7PHREXV0R73GASW2E7W"],
-                "partial_inventory_sha256": "298bb4905504b37f9eeb0fb77fd421ebec1d3bb372abc8a5b2c41bcfca818239",
-                "failure_reason": "canonical executor precreated the empty work directory but producer incorrectly required mkdir(exist_ok=False) after training",
+                "prior_manifest_sha256": "a1cf2f0e209d73bd9a68bf0fd460dc6a483b03836d76745f70cc1c4787210f60",
+                "failed_call_ids": ["fc-01KZXN7T9ZE4QYJK0CGWCERM48"],
+                "partial_inventory_sha256": "75b0a6f7785113c1b8acf7816b5e7b2ad9667ba5523ff6acf3b1b0c768a2709d",
+                "failure_reason": "evaluation encoder helper expected a full simulator episode instead of consuming the matched pair's sealed observation-only encoder_input record",
                 "source_outputs_reused": False,
                 "source_root_mutated": False,
             },
@@ -101,6 +101,11 @@ def stage_b_manifest() -> dict[str, Any]:
                     "manifest_sha256": "12779307505f4bc9abf8542acb54cc4ead86c749c504e2974e6f145bf731c231",
                     "call_id": "fc-01KZXMBB0J4W584XNAANZTC415",
                     "partial_inventory_sha256": "44c8ce9de35c5029cfeb33c996603f4f3b7e3f29be4e20ca39a22b60225e94df",
+                },
+                {
+                    "manifest_sha256": "0fb190497453563cfe7ff231de2cfa90e097597ab99a9a1c856944d8ff0c0617",
+                    "call_id": "fc-01KZXMQ7PHREXV0R73GASW2E7W",
+                    "partial_inventory_sha256": "298bb4905504b37f9eeb0fb77fd421ebec1d3bb372abc8a5b2c41bcfca818239",
                 },
             ],
         },
@@ -359,7 +364,8 @@ def _load_world(root: Path, device: str):
 def _encode(encoder: Any, episode: dict[str, Any], device: str):
     import torch
 
-    observation = ObservationArtifact.from_payload(serialize_visible_observations(episode))
+    payload = episode.get("encoder_input") or serialize_visible_observations(episode)
+    observation = ObservationArtifact.from_payload(payload)
     tensor = torch.tensor([observation.values], dtype=torch.float32, device=device)
     with torch.no_grad():
         z = encoder(tensor)
@@ -407,6 +413,80 @@ def _envelope(*, decoder: Any, z: Any, observation: ObservationArtifact, recipie
         run_id=run_id, code_version=code_sha, checkpoint_id=checkpoint_id,
     )
     return sealed, serialized.data, svg
+
+
+def matched_pair_cpu_generation_preflight(encoder: Any, decoder: Any, tokenizer: Any) -> dict[str, Any]:
+    """Run one sealed matched pair through the exact six-arm evaluation seam on CPU."""
+    import torch
+
+    pair = matched_world_pair(pair_seed=33173, config=SimulatorConfig(steps=12))
+    wrong = _episode(derive_seed(33173, "stage-b-preflight-wrong"), "stage-b-preflight-wrong")
+    za, oa = _encode(encoder, pair["a"], "cpu")
+    zb, ob = _encode(encoder, pair["b"], "cpu")
+    zw, ow = _encode(encoder, wrong, "cpu")
+    if oa.sha256() != pair["a"]["encoder_input_sha256"] or ob.sha256() != pair["b"]["encoder_input_sha256"]:
+        raise RuntimeError("matched-pair encoder did not consume the sealed encoder_input bytes")
+
+    class _DeterministicGrammarModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedding = torch.nn.Embedding(len(tokenizer), 12)
+            self.answer_ids = torch.empty((1, 0), dtype=torch.long)
+
+        def get_input_embeddings(self):
+            return self.embedding
+
+        def generate(self, input_ids: Any, **_kwargs: Any):
+            self.embedding(input_ids)
+            return torch.cat([input_ids, self.answer_ids.to(input_ids.device)], dim=1)
+
+    model = _DeterministicGrammarModel()
+    projector = build_gated_residual_projector(12, latent_dim=LATENT_DIM)
+    target_a = _stage_d_target(pair["a"]["scoring_target"])
+    target_b = _stage_d_target(pair["b"]["scoring_target"])
+
+    def generated(z: Any, target: dict[str, Any], *, enabled: bool) -> dict[str, Any]:
+        text = json.dumps(target, sort_keys=True, separators=(",", ":"))
+        model.answer_ids = tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
+        return _generate(model, tokenizer, projector, z, enabled=enabled)
+
+    answers = {
+        "own_z": generated(za, target_a, enabled=True),
+        "no_z": generated(za, target_a, enabled=False),
+        "wrong_world_z": generated(zw, target_a, enabled=True),
+        "swap_a_to_b": generated(za, target_a, enabled=True),
+        "swap_b_to_a": generated(zb, target_b, enabled=True),
+    }
+    raw_a = serialize_long_horizon_latent(za[0]).data
+    raw_b = serialize_long_horizon_latent(zb[0]).data
+    raw_w = serialize_long_horizon_latent(zw[0]).data
+    permutation = list(reversed(range(LATENT_DIM)))
+    checkpoint = "stage-b-" + "5" * 64
+    own_env, _, _ = _envelope(decoder=decoder, z=za[0], observation=oa, recipient=pair["a"]["episode_id"], donor=None, pair_id=pair["pair_id"], answer=answers["own_z"], run_id="cpu-preflight-own", checkpoint_id=checkpoint, code_sha="6" * 40)
+    scrambled_binding, raw_s = scrambled_injection(own_env, raw_a, tensor_artifact_name="cpu-preflight-scrambled.f32le.bin", seed=33173, indices=permutation)
+    zs = torch.frombuffer(bytearray(raw_s), dtype=torch.float32).reshape(1, LATENT_DIM)
+    answers["scrambled_z"] = generated(zs, target_a, enabled=True)
+    wrong_env, _, _ = _envelope(decoder=decoder, z=zw[0], observation=ow, recipient=pair["a"]["episode_id"], donor=wrong["episode_id"], pair_id=pair["pair_id"], answer=answers["wrong_world_z"], run_id="cpu-preflight-wrong", checkpoint_id=checkpoint, code_sha="6" * 40)
+    a2b_env, _, _ = _envelope(decoder=decoder, z=za[0], observation=oa, recipient=pair["b"]["episode_id"], donor=pair["a"]["episode_id"], pair_id=pair["pair_id"], answer=answers["swap_a_to_b"], run_id="cpu-preflight-a2b", checkpoint_id=checkpoint, code_sha="6" * 40)
+    b2a_env, _, _ = _envelope(decoder=decoder, z=zb[0], observation=ob, recipient=pair["a"]["episode_id"], donor=pair["b"]["episode_id"], pair_id=pair["pair_id"], answer=answers["swap_b_to_a"], run_id="cpu-preflight-b2a", checkpoint_id=checkpoint, code_sha="6" * 40)
+    materials = {
+        "own_z": (pair["a"]["episode_id"], pair["a"]["episode_id"], own_env, raw_a, raw_a, identity_injection(own_env, raw_a)),
+        "no_z": (pair["a"]["episode_id"], None, None, None, None, no_z_injection()),
+        "scrambled_z": (pair["a"]["episode_id"], pair["a"]["episode_id"], own_env, raw_a, raw_s, scrambled_binding),
+        "wrong_world_z": (pair["a"]["episode_id"], wrong["episode_id"], wrong_env, raw_w, raw_w, identity_injection(wrong_env, raw_w)),
+        "swap_a_to_b": (pair["b"]["episode_id"], pair["a"]["episode_id"], a2b_env, raw_a, raw_a, identity_injection(a2b_env, raw_a)),
+        "swap_b_to_a": (pair["a"]["episode_id"], pair["b"]["episode_id"], b2a_env, raw_b, raw_b, identity_injection(b2a_env, raw_b)),
+    }
+    arm_inputs = {}
+    for arm in STAGE_D_ARMS:
+        recipient, source, latent, source_raw, injected_raw, injection = materials[arm]
+        payload = build_stage_d_control_result(arm_id=arm, checkpoint_id=checkpoint, manifest_sha256=STAGE_B_MANIFEST_SHA256, pair_id=pair["pair_id"], recipient_world_id=recipient, source_world_id=source, answer=answers[arm], injection=injection)
+        sealed = seal_result_envelope(payload, source="cached", manifest_sha256=STAGE_B_MANIFEST_SHA256, run_id=f"cpu-preflight-{arm}", code_version="6" * 40, checkpoint_id=checkpoint)
+        arm_inputs[arm] = StageDArmInput(sealed, "cached", latent, source_raw, injected_raw)
+    spec = StageDControlSpec(checkpoint_id=checkpoint, manifest_sha256=STAGE_B_MANIFEST_SHA256, pair_id=pair["pair_id"], cluster_id="cpu-preflight", world_a_id=pair["a"]["episode_id"], world_b_id=pair["b"]["episode_id"], wrong_world_id=wrong["episode_id"], world_a_target=target_a, world_b_target=target_b)
+    result = execute_stage_d_control_set(spec, arm_inputs)
+    result.verify()
+    return {"pair_id": pair["pair_id"], "arms": len(result.arms), "observation_schema": pair["a"]["encoder_input"]["schema_version"], "content_sha256": result.content_sha256}
 
 
 def _paired_ci(values: list[float], seed: int) -> list[float]:
