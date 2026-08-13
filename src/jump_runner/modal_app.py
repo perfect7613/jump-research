@@ -52,6 +52,7 @@ track_h_image = (
     .pip_install(
         "jsonschema==4.26.0",
         "numpy==2.3.2",
+        "Pillow==11.3.0",
         "safetensors==0.8.0",
         "torch==2.11.0",
     )
@@ -798,6 +799,33 @@ def submit_behavioral_distillation(expected_manifest_sha256: str, expected_code_
     try: os.fsync(fd)
     finally: os.close(fd)
     print(json.dumps({**record,"record_path":str(path)},sort_keys=True))
+
+
+def _authorize_object_jepa(*, expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool, confirm_h100: bool) -> dict[str, Any]:
+    from jump_benchmark.object_jepa import MANIFEST_SHA256, object_jepa_manifest
+    if confirm_paid is not True or confirm_h100 is not True: raise RunnerError("object JEPA requires literal paid and H100 confirmations")
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION: raise RunnerError("object JEPA immutable identity mismatch")
+    execution=object_jepa_manifest()["execution"];forecast=execution["timeout_seconds"]/3600*execution["h100_rate_usd_per_hour"]
+    if execution["resource"]!="H100" or execution["gpu_count"]!=1 or execution["max_containers"]!=1 or execution["max_inputs"]!=1 or execution["max_attempts"]!=1 or abs(forecast-execution["forecast_usd"])>1e-9 or forecast>execution["aggregate_authority_ceiling_usd"]: raise RunnerError("object JEPA resource/cost contract mismatch")
+    return execution
+
+@app.function(image=track_h_image,timeout=300,max_containers=1,name="authentic_world_object_jepa_preflight")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_preflight(expected_manifest_sha256: str,expected_code_sha: str)->dict[str,Any]:
+    from jump_benchmark.object_jepa import MANIFEST_SHA256,cpu_preflight
+    if expected_manifest_sha256!=MANIFEST_SHA256 or expected_code_sha!=CODE_VERSION:raise RunnerError("object JEPA preflight identity mismatch")
+    return {"status":"passed","manifest_sha256":MANIFEST_SHA256,"code_sha":CODE_VERSION,"seam":cpu_preflight(),"gpu_allocated":False,"persistent_root_created":False}
+
+@app.function(image=track_h_image,gpu="H100",timeout=3600,max_containers=1,volumes={str(VOLUME_PATH):volume},name="authentic_world_object_jepa_pilot")
+@modal.concurrent(max_inputs=1)
+def authentic_world_object_jepa_pilot(expected_manifest_sha256: str,expected_code_sha: str,confirm_paid: bool=False,confirm_h100: bool=False)->dict[str,Any]:
+    from jump_benchmark.object_jepa import run_contract
+    _authorize_object_jepa(expected_manifest_sha256=expected_manifest_sha256,expected_code_sha=expected_code_sha,confirm_paid=confirm_paid,confirm_h100=confirm_h100)
+    root=VOLUME_PATH/"authentic-world-object-jepa"/expected_manifest_sha256/"run";phase,run=run_contract(expected_manifest_sha256,expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result=execute_local_run(phase,run,root,expected_manifest_sha256);volume.commit()
+        if result.get("status")!="completed":raise RunnerError(f"object JEPA failed: {result.get('error')}")
+        return result
 
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
