@@ -498,6 +498,12 @@ def _verify_evidence(
         raise ExperimentContractError("run evidence measurements do not match the ExperimentRun")
     if normative_result.get("comparisons") != run["comparisons"]:
         raise ExperimentContractError("run evidence comparisons do not match the ExperimentRun")
+    expected_metrics = [
+        {"name": comparison["id"], "value": comparison["estimate"]}
+        for comparison in run["comparisons"]
+    ]
+    if normative_result["metrics"] != expected_metrics:
+        raise ExperimentContractError("run evidence metrics do not match the frozen comparisons")
     sealed_provenance = sealed_value["provenance"]
     if sealed_provenance["run_id"] != modal_call_id:
         raise ExperimentContractError("sealed result does not match the Modal call identity")

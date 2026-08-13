@@ -183,7 +183,11 @@ def test_run_requires_plan_evidence_and_complete_row_bound_comparisons():
         validate_experiment_run(run)  # type: ignore[call-arg]
     tampered_comparisons = deepcopy(comparisons)
     tampered_comparisons[0]["estimate"] = 9.0
-    tampered_result = {**run_result, "comparisons": tampered_comparisons}
+    tampered_result = {
+        **run_result,
+        "metrics": [{"name": "offset_effect", "value": 9.0}],
+        "comparisons": tampered_comparisons,
+    }
     tampered_sealed = seal_result_envelope(
         {**sealed_payload, "comparisons": tampered_comparisons}, source="live",
         manifest_sha256=plan["plan_sha256"], run_id="fc-test", code_version="b" * 40,
