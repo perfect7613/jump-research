@@ -337,11 +337,23 @@ def injection_sensitivity_diagnostic(
     }
 
 
-def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
+_LIVE_RUNTIME: dict[str, Any] = {}
+
+
+def live_compute(
+    request: dict[str, Any], *, cache_root: Path, commit_cache: Callable[[], None]
+) -> dict[str, Any]:
+    """Private GPU compute seam; no unauthenticated web route reaches it."""
+    if not _LIVE_RUNTIME:
+        _LIVE_RUNTIME.update(_load_runtime(cache_root, commit_cache))
+    return _live_result(_LIVE_RUNTIME, request)
+
+
+def build_live_gateway(run_compute: Callable[[dict[str, Any]], Any]):
+    """CPU-only authenticated gateway in front of the private H100 function."""
     from fastapi import FastAPI, HTTPException, Request
 
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
-    state: dict[str, Any] = {}
     request_count = {"value": 0}
 
     def authorize(request: Request) -> None:
@@ -375,10 +387,8 @@ def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError("request must be a JSON object")
-            if not state:
-                state.update(_load_runtime(cache_root, commit_cache))
             request_count["value"] += 1
-            return _live_result(state, body)
+            return await run_compute(body)
         except HTTPException:
             raise
         except (TypeError, ValueError) as exc:
@@ -391,10 +401,10 @@ def http_boundary_preflight(cache_root: Path, commit_cache: Callable[[], None]) 
     """Exercise the actual ASGI request boundary without loading weights."""
     from fastapi.testclient import TestClient
 
-    app = build_live_app(
-        cache_root=Path("/tmp/preflight-cache"),
-        commit_cache=lambda: (_ for _ in ()).throw(RuntimeError("weights must not load")),
-    )
+    async def compute_must_not_run(_request: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("unauthenticated request reached GPU compute")
+
+    app = build_live_gateway(compute_must_not_run)
     response = TestClient(app).post(
         "/v1/experiment",
         json={
