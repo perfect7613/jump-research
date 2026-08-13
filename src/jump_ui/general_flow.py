@@ -197,9 +197,28 @@ def result_rows(run: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, st
     relation = checked_run["execution"]["prediction"]["claims"][0]["expected_relation"]
     estimate = checked_run["comparisons"][0]["estimate"]
     matched = (relation == "less" and estimate < 0) or (relation == "greater" and estimate > 0)
+    prediction = checked_run["execution"]["prediction"]
+    claim_text = "; ".join(
+        f"{claim['target_id']}: expected {claim['expected_relation']} — {claim['rationale']}"
+        + (f" (expected value {claim['expected_value']:.3g})" if claim["expected_value"] is not None else "")
+        for claim in prediction["claims"]
+    )
+    conditions = {condition["id"]: condition["label"] for condition in checked["conditions"]}
+    measurement = checked["measurements"][0]
+    measured_averages = []
+    for condition_id, label in conditions.items():
+        values = [
+            row["values"][measurement["id"]]
+            for row in checked_run["measurements"]
+            if row["condition_id"] == condition_id
+        ]
+        measured_averages.append(f"{label}: {sum(values) / len(values):.3g}")
     return {
-        "Prediction": checked_run["execution"]["prediction"]["summary"],
-        "Simulation": f"The intervention changed the measured average by {estimate:.3g}.",
+        "Prediction": f"{prediction['summary']} {claim_text}",
+        "Simulation": (
+            f"Measured {measurement['label'].lower()} averages — {'; '.join(measured_averages)}. "
+            f"The intervention-minus-baseline comparison was {estimate:.3g}."
+        ),
         "Was the prediction right?": "Yes—the simulated direction matched the prediction." if matched else "No—the simulated direction differed from the prediction.",
         "What the model changed its mind about": (
             f"Disposition: {checked_run['revision']['disposition']}. "

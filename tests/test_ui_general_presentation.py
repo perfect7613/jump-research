@@ -16,6 +16,9 @@ from jump_ui.general_presentation import (
     SUBCOPY,
     hero_html,
     particle_research_card,
+    no_learned_world_image,
+    plan_summary,
+    completed_summary,
     plan_shell,
     result_shell,
 )
@@ -44,6 +47,11 @@ def test_general_plan_and_result_order_is_fixed():
     cards = result_shell(sections)
     assert len(cards) == 5
     assert all(label in card for label, card in zip(RESULT_LABELS, cards))
+    assert "experiment hypothesis" in plan_summary(rows)
+    summary = completed_summary(sections)
+    assert "Recorded prediction" in summary
+    assert "Measured result" in summary
+    assert "This general experiment does not produce a learned-world image" in no_learned_world_image()
 
 
 def test_unvalidated_or_incomplete_rows_fail_closed():

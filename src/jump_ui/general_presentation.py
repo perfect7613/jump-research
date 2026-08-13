@@ -60,6 +60,53 @@ def particle_research_card() -> str:
     )
 
 
+def ready_summary() -> str:
+    return (
+        '<section class="result-summary" aria-live="polite">'
+        '<p class="eyebrow">Experiment status</p>'
+        '<h2>Ready to build a supported experiment plan.</h2>'
+        '<p>The expected outcome and confirmation step will appear here.</p>'
+        '</section>'
+    )
+
+
+def plan_summary(rows: Mapping[str, str]) -> str:
+    if tuple(rows) != PLAN_LABELS:
+        raise ValueError("plan summary requires the six exact plan rows")
+    return (
+        '<section class="result-summary" aria-live="polite">'
+        '<p class="eyebrow">Expected outcome · review before running</p>'
+        f'<h2>{escape(rows["Hypothesis"])}</h2>'
+        '<p>This is the experiment hypothesis, not a measured result or the model’s recorded prediction. '
+        'Confirm the plan to record a prediction and run the simulation.</p>'
+        '</section>'
+    )
+
+
+def completed_summary(sections: Mapping[str, str]) -> str:
+    if tuple(sections) != RESULT_LABELS:
+        raise ValueError("completed summary requires the five exact result sections")
+    return (
+        '<section class="result-summary completed-summary" aria-live="polite">'
+        '<p class="eyebrow">Experiment complete</p>'
+        '<h2>Prediction and result</h2>'
+        f'<p><strong>Recorded prediction:</strong> {escape(sections["Prediction"])}</p>'
+        f'<p><strong>Measured result:</strong> {escape(sections["Simulation"])}</p>'
+        f'<p><strong>Interpretation:</strong> {escape(sections["What the model changed its mind about"])}</p>'
+        '</section>'
+    )
+
+
+def no_learned_world_image() -> str:
+    return (
+        '<section class="image-status" aria-live="polite">'
+        '<p class="eyebrow">Learned-world image</p>'
+        '<p>This general experiment does not produce a learned-world image. No verified learned-decoder image '
+        'field exists in this response, and simulator artwork is never substituted.</p>'
+        '</section>'
+    )
+
+
 def plan_shell(rows: Mapping[str, str]) -> str:
     """Render only already-validated, presentation-safe row strings."""
     if tuple(rows) != PLAN_LABELS or any(not isinstance(value, str) or not value for value in rows.values()):

@@ -67,3 +67,5 @@ def test_bernoulli_fixture_passes_direct_plan_and_run_validation():
     sections = result_rows(execute_fixture(prepared), prepared.plan)
     assert sections["Was the prediction right?"].startswith("Yes")
     assert "0.2" in sections["Simulation"]
+    assert "Probability 0.5" in sections["Simulation"]
+    assert "primary_comparison" in sections["Prediction"]
