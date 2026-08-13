@@ -14,12 +14,18 @@ import modal
 
 from .errors import RunnerError
 from .executor import execute_local_run, read_status, run_manifest, run_root
-from .manifest import authorize_launch, manifest_hash, resolve_run
+from .manifest import authorize_launch, manifest_hash, resolve_run, validate_json_schema
 
 APP_NAME = os.environ.get("JUMP_MODAL_APP_NAME", "jump-sequential-experiments")
 VOLUME_NAME = os.environ.get("JUMP_MODAL_VOLUME_NAME", "jump-experiment-runs-v1")
 VOLUME_PATH = Path("/jump-runs")
 CONTROLLER_MAX_CONTAINERS = 1
+STAGE_C_REQUIRED_SUBPROCESS_ENV_KEYS = (
+    "PATH",
+    "PYTHONPATH",
+    "HOME",
+    "JUMP_CODE_VERSION",
+)
 
 
 def _code_version() -> str:
@@ -38,6 +44,17 @@ CODE_VERSION = _code_version()
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("jsonschema>=4.23,<5", "PyYAML>=6.0,<7")
+    .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
+    .add_local_dir("src", remote_path="/opt/jump/src")
+)
+track_h_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "jsonschema==4.26.0",
+        "numpy==2.3.2",
+        "safetensors==0.8.0",
+        "torch==2.11.0",
+    )
     .env({"PYTHONPATH": "/opt/jump/src", "JUMP_CODE_VERSION": CODE_VERSION})
     .add_local_dir("src", remote_path="/opt/jump/src")
 )
@@ -256,6 +273,196 @@ def orchestrate(
 def get_status(manifest: dict[str, Any], smoke: bool = False) -> dict[str, Any]:
     volume.reload()
     return read_status(manifest, VOLUME_PATH, smoke=smoke)
+
+
+def _validate_track_h_runtime() -> dict[str, Any]:
+    """Validate the exact Stage C image dependency before any evidence root write."""
+    from importlib.metadata import version
+
+    jsonschema_version = version("jsonschema")
+    if jsonschema_version != "4.26.0":
+        raise RuntimeError("Stage C image requires jsonschema==4.26.0")
+    missing = [key for key in STAGE_C_REQUIRED_SUBPROCESS_ENV_KEYS if not os.environ.get(key)]
+    if missing:
+        raise RuntimeError(f"Stage C subprocess environment is missing {missing}")
+    if os.environ["JUMP_CODE_VERSION"] != CODE_VERSION:
+        raise RuntimeError("Stage C subprocess code identity does not match deployed code")
+    validate_json_schema(
+        {
+            "schema_version": "jump.run-result/v1",
+            "status": "completed",
+            "attempt": 1,
+            "metrics": [],
+            "artifacts": [],
+            "provenance": {
+                "manifest_sha256": "0" * 64,
+                "run_id": "stage-c-image-preflight",
+                "code_version": CODE_VERSION,
+            },
+        },
+        "run-result-v1.schema.json",
+    )
+    return {
+        "status": "passed",
+        "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+        "jsonschema_version": jsonschema_version,
+        "code_sha": CODE_VERSION,
+        "gpu_allocated": False,
+        "evidence_root_created": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
+    timeout=60,
+    max_containers=1,
+    name="authentic_world_stage_c_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_c_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """CPU-only dependency/schema preflight; this function cannot allocate a GPU."""
+    from jump_benchmark.authentic_stage_c import STAGE_C_MANIFEST_SHA256
+
+    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256:
+        raise RunnerError("Stage C preflight manifest hash mismatch")
+    if expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage C preflight code revision mismatch")
+    return {**_validate_track_h_runtime(), "manifest_sha256": STAGE_C_MANIFEST_SHA256}
+
+
+@app.function(
+    image=track_h_image,
+    timeout=300,
+    max_containers=1,
+    name="authentic_world_stage_c_task_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_c_task_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """Run the actual allowlisted task through canonical promotion on CPU only."""
+    from jump_benchmark.authentic_stage_c import (
+        STAGE_C_MANIFEST_SHA256,
+        stage_c_run_contract,
+    )
+
+    _validate_track_h_runtime()
+    if expected_manifest_sha256 != STAGE_C_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Stage C task preflight identity mismatch")
+    phase, run = stage_c_run_contract(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        dry_run=True,
+    )
+    root = (
+        Path("/tmp")
+        / "jump-stage-c-task-preflight"
+        / expected_manifest_sha256
+        / uuid.uuid4().hex
+    )
+    result = execute_local_run(phase, run, root, expected_manifest_sha256)
+    if result.get("status") != "completed" or result["provenance"]["code_version"] != CODE_VERSION:
+        raise RunnerError("Stage C task preflight did not reach canonical completion")
+    return {
+        "status": "passed",
+        "schema_version": result["schema_version"],
+        "code_sha": result["provenance"]["code_version"],
+        "manifest_sha256": result["provenance"]["manifest_sha256"],
+        "attempt": result["attempt"],
+        "artifacts_promoted": len(result["artifacts"]),
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+        "git_required": False,
+    }
+
+
+@app.function(
+    image=track_h_image,
+    gpu="H100",
+    timeout=10_800,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    name="authentic_world_stage_c",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_stage_c(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    """Run the frozen three-seed predictive-world pilot in one serial call."""
+    from jump_benchmark.authentic_stage_c import (
+        STAGE_C_MANIFEST_SHA256,
+        authorize_stage_c_launch,
+        stage_c_run_contract,
+    )
+    _validate_track_h_runtime()
+    authorize_stage_c_launch(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        actual_code_sha=CODE_VERSION,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    run_root_path = VOLUME_PATH / "authentic-world-stage-c" / STAGE_C_MANIFEST_SHA256 / "run"
+    phase, run = stage_c_run_contract(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+    )
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(
+            phase,
+            run,
+            run_root_path,
+            expected_manifest_sha256,
+        )
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"Stage C task failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-stage-c")
+def submit_stage_c(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> None:
+    """Validate locally, spawn exactly once, and persist the call ID before exit."""
+    from jump_benchmark.authentic_stage_c import authorize_stage_c_launch
+
+    plan = authorize_stage_c_launch(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        actual_code_sha=CODE_VERSION,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    call = authentic_world_stage_c.spawn(
+        expected_manifest_sha256,
+        expected_code_sha,
+        confirm_paid=True,
+        confirm_h100=True,
+    )
+    record = {
+        "app_name": APP_NAME,
+        "function": "authentic_world_stage_c",
+        "call_id": call.object_id,
+        "manifest_sha256": expected_manifest_sha256,
+        "code_sha": expected_code_sha,
+        "experiment_id": plan["experiment_id"],
+    }
+    registry = Path(".jump/submissions")
+    registry.mkdir(parents=True, exist_ok=True)
+    record_path = registry / f"{call.object_id}.json"
+    record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    print(json.dumps({**record, "record_path": str(record_path)}, sort_keys=True))
 
 
 @app.local_entrypoint(name="submit")
