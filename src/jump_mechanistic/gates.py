@@ -13,12 +13,14 @@ from dataclasses import InitVar, asdict, dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 from jump_contracts import (
+    canonical_json,
     open_result_envelope,
     validate_learned_latent_evidence,
     verify_latent_tensor_bytes,
 )
 
 from .metrics import CheckpointIdentity, paired_effect
+from .scoring import score_episode
 
 _REQUIRED_HASH = 64
 _MIN_CONFIRMATORY_CLUSTERS = 20
@@ -32,6 +34,20 @@ _STAGES = ("inadequacy", "promotion")
 _ARMS = ("control_natural", "treated_natural", "treated_control_clamp")
 _SWAP_RECORD_TOKEN = object()
 _GATE_DECISION_TOKEN = object()
+_SWAP_COMPARISON_TOKEN = object()
+SWAP_SCORING_CONTRACT = {
+    "schema_version": "jump.swap-scoring/v1",
+    "scorer": "jump_mechanistic.scoring.score_episode",
+    "score_fields": ["joint_theory_accuracy", "adequacy_correct"],
+    "decision": "donor_score > recipient_score",
+    "reference_requirements": [
+        "recipient_baseline_prefers_recipient_target",
+        "donor_reference_prefers_donor_target",
+    ],
+}
+SWAP_SCORING_CONTRACT_SHA256 = hashlib.sha256(
+    canonical_json(SWAP_SCORING_CONTRACT)
+).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -101,6 +117,58 @@ class BehaviorConditionRecord:
 
 
 @dataclass(frozen=True)
+class SwapComparisonBinding:
+    direction: str
+    recipient_baseline_answer_sha256: str
+    donor_reference_answer_sha256: str
+    swapped_answer_sha256: str
+    recipient_target_sha256: str
+    donor_target_sha256: str
+    scoring_contract_sha256: str
+    recipient_score: float
+    donor_score: float
+    moved_toward_donor: bool
+    content_sha256: str
+    _construction_token: InitVar[object]
+
+    def __post_init__(self, _construction_token: object) -> None:
+        if _construction_token is not _SWAP_COMPARISON_TOKEN:
+            raise ValueError("swap comparisons must be computed by the locked scoring factory")
+
+    def unsigned_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "jump.swap-comparison/v1",
+            "direction": self.direction,
+            "recipient_baseline_answer_sha256": self.recipient_baseline_answer_sha256,
+            "donor_reference_answer_sha256": self.donor_reference_answer_sha256,
+            "swapped_answer_sha256": self.swapped_answer_sha256,
+            "recipient_target_sha256": self.recipient_target_sha256,
+            "donor_target_sha256": self.donor_target_sha256,
+            "scoring_contract_sha256": self.scoring_contract_sha256,
+            "recipient_score": self.recipient_score,
+            "donor_score": self.donor_score,
+            "moved_toward_donor": self.moved_toward_donor,
+        }
+
+    def verify(self) -> None:
+        if self.scoring_contract_sha256 != SWAP_SCORING_CONTRACT_SHA256:
+            raise ValueError("swap comparison scoring contract drifted")
+        for name in (
+            "recipient_baseline_answer_sha256",
+            "donor_reference_answer_sha256",
+            "swapped_answer_sha256",
+            "recipient_target_sha256",
+            "donor_target_sha256",
+            "scoring_contract_sha256",
+        ):
+            _digest(getattr(self, name), f"swap comparison {name}")
+        if self.moved_toward_donor != (self.donor_score > self.recipient_score):
+            raise ValueError("swap outcome is inconsistent with locked comparison scores")
+        if _hash(self.unsigned_dict()) != self.content_sha256:
+            raise ValueError("swap comparison content hash mismatch")
+
+
+@dataclass(frozen=True)
 class SwapOutcomeRecord:
     checkpoint_id: str
     pair_id: str
@@ -119,6 +187,9 @@ class SwapOutcomeRecord:
     envelope_payload_sha256: str
     donor_world_id: str
     recipient_world_id: str
+    world_a_id: str
+    world_b_id: str
+    comparison: SwapComparisonBinding | None
     _construction_token: InitVar[object]
 
     def __post_init__(self, _construction_token: object) -> None:
@@ -165,6 +236,9 @@ class SwapOutcomeRecord:
             ),
             donor_world_id=donor_world_id,
             recipient_world_id=recipient_world_id,
+            world_a_id=donor_world_id if direction == "a_to_b" else recipient_world_id,
+            world_b_id=recipient_world_id if direction == "a_to_b" else donor_world_id,
+            comparison=None,
             _construction_token=_SWAP_RECORD_TOKEN,
         )
 
@@ -177,12 +251,15 @@ class SwapOutcomeRecord:
         checkpoint_id: str,
         pair_id: str,
         cluster_id: str,
-        direction: str,
-        moved_toward_donor: bool,
         recipient_prompt_token_count: int,
         donor_prompt_token_count: int,
-        donor_world_id: str,
-        recipient_world_id: str,
+        world_a_id: str,
+        world_b_id: str,
+        recipient_baseline_answer: Mapping[str, Any],
+        donor_reference_answer: Mapping[str, Any],
+        recipient_target: Mapping[str, Any],
+        donor_target: Mapping[str, Any],
+        scoring_contract_sha256: str,
         expected_source: str,
         expected_manifest_sha256: str,
     ) -> "SwapOutcomeRecord":
@@ -196,24 +273,41 @@ class SwapOutcomeRecord:
         evidence = validate_learned_latent_evidence(payload)
         verify_latent_tensor_bytes(evidence, latent_tensor_bytes)
         lineage = evidence["swap_lineage"]
+        donor_world_id = lineage["donor_world_id"]
+        recipient_world_id = lineage["recipient_world_id"]
+        if (donor_world_id, recipient_world_id) == (world_a_id, world_b_id):
+            direction = "a_to_b"
+        elif (donor_world_id, recipient_world_id) == (world_b_id, world_a_id):
+            direction = "b_to_a"
+        else:
+            raise ValueError("authentic swap lineage does not match the declared World A/B pair")
         if (
             lineage["mode"] != "donor_swap"
             or lineage["world_pair_id"] != pair_id
-            or lineage["donor_world_id"] != donor_world_id
             or lineage["source_world_id"] != donor_world_id
-            or lineage["recipient_world_id"] != recipient_world_id
             or lineage["direction"] != f"{donor_world_id}->{recipient_world_id}"
         ):
             raise ValueError("authentic swap envelope donor lineage does not match the requested pair")
         tensor = evidence["tensor"]
         binding = evidence["answer_binding"]
+        comparison = _build_swap_comparison(
+            direction=direction,
+            recipient_baseline_answer=recipient_baseline_answer,
+            donor_reference_answer=donor_reference_answer,
+            swapped_answer=evidence["answer"],
+            recipient_target=recipient_target,
+            donor_target=donor_target,
+            scoring_contract_sha256=scoring_contract_sha256,
+        )
+        if comparison.swapped_answer_sha256 != binding["answer_sha256"]:
+            raise ValueError("swap comparison is not bound to the sealed answer")
         world_hash = tensor["world_latent_sha256"]
         return cls(
             checkpoint_id=checkpoint_id,
             pair_id=pair_id,
             cluster_id=cluster_id,
             direction=direction,
-            moved_toward_donor=moved_toward_donor,
+            moved_toward_donor=comparison.moved_toward_donor,
             recipient_prompt_token_count=recipient_prompt_token_count,
             donor_prompt_token_count=donor_prompt_token_count,
             evidence_namespace="authentic_learned_latent",
@@ -226,6 +320,9 @@ class SwapOutcomeRecord:
             envelope_payload_sha256=envelope["payload_sha256"],
             donor_world_id=donor_world_id,
             recipient_world_id=recipient_world_id,
+            world_a_id=world_a_id,
+            world_b_id=world_b_id,
+            comparison=comparison,
             _construction_token=_SWAP_RECORD_TOKEN,
         )
 
@@ -687,6 +784,27 @@ def _validate_g3_records(condition_records: Sequence[BehaviorConditionRecord], s
             raise ValueError("G3 swap evidence namespace is unknown")
         if row.donor_world_id == row.recipient_world_id:
             raise ValueError("G3 swap donor and recipient worlds must be distinct")
+        expected_direction = (
+            "a_to_b"
+            if (row.donor_world_id, row.recipient_world_id) == (row.world_a_id, row.world_b_id)
+            else "b_to_a"
+            if (row.donor_world_id, row.recipient_world_id) == (row.world_b_id, row.world_a_id)
+            else None
+        )
+        if expected_direction != row.direction:
+            raise ValueError("G3 swap direction does not match donor/recipient World A/B lineage")
+        if row.evidence_namespace == "authentic_learned_latent":
+            if not isinstance(row.comparison, SwapComparisonBinding):
+                raise ValueError("authentic G3 swaps require a locked scoring comparison")
+            row.comparison.verify()
+            if (
+                row.comparison.direction != row.direction
+                or row.comparison.swapped_answer_sha256 != row.answer_sha256
+                or row.comparison.moved_toward_donor != row.moved_toward_donor
+            ):
+                raise ValueError("authentic G3 outcome is not bound to the sealed answer and lineage")
+        elif row.comparison is not None:
+            raise ValueError("synthetic fixture swaps cannot masquerade as authentic comparisons")
         for field in (
             "world_latent_sha256",
             "decoder_input_sha256",
@@ -702,7 +820,82 @@ def _validate_g3_records(condition_records: Sequence[BehaviorConditionRecord], s
         grouped.setdefault((row.checkpoint_id, row.pair_id), set()).add(row.direction)
     if any(directions != {"a_to_b", "b_to_a"} for directions in grouped.values()):
         raise ValueError("G3 swaps require both directions for every pair")
+    authentic_envelopes: dict[tuple[str, str], set[str]] = {}
+    for row in swap_records:
+        if row.evidence_namespace == "authentic_learned_latent":
+            authentic_envelopes.setdefault((row.checkpoint_id, row.pair_id), set()).add(
+                row.envelope_payload_sha256
+            )
+    if any(len(hashes) != 2 for hashes in authentic_envelopes.values()):
+        raise ValueError("authentic G3 pairs require two distinct mirrored sealed envelopes")
     _unique(swap_records, lambda r: (r.checkpoint_id, r.pair_id, r.direction), "G3 swap direction")
+
+
+def _build_swap_comparison(
+    *,
+    direction: str,
+    recipient_baseline_answer: Mapping[str, Any],
+    donor_reference_answer: Mapping[str, Any],
+    swapped_answer: Mapping[str, Any],
+    recipient_target: Mapping[str, Any],
+    donor_target: Mapping[str, Any],
+    scoring_contract_sha256: str,
+) -> SwapComparisonBinding:
+    if scoring_contract_sha256 != SWAP_SCORING_CONTRACT_SHA256:
+        raise ValueError("swap scoring contract hash does not match the locked scorer")
+    try:
+        answers = {
+            "recipient_baseline": dict(recipient_baseline_answer),
+            "donor_reference": dict(donor_reference_answer),
+            "swapped": dict(swapped_answer),
+        }
+        targets = {"recipient": dict(recipient_target), "donor": dict(donor_target)}
+    except (TypeError, ValueError) as exc:
+        raise ValueError("swap comparison answers and targets must be mappings") from exc
+    recipient_baseline_scores = score_episode(answers["recipient_baseline"], targets["recipient"])
+    donor_reference_scores = score_episode(answers["donor_reference"], targets["donor"])
+    if (
+        recipient_baseline_scores["joint_theory_accuracy"] != 1.0
+        or donor_reference_scores["joint_theory_accuracy"] != 1.0
+    ):
+        raise ValueError("swap reference answers must exactly score against their own targets")
+    swapped_recipient = score_episode(answers["swapped"], targets["recipient"])
+    swapped_donor = score_episode(answers["swapped"], targets["donor"])
+    recipient_score = (
+        swapped_recipient["joint_theory_accuracy"]
+        + swapped_recipient["adequacy_correct"]
+    ) / 2.0
+    donor_score = (
+        swapped_donor["joint_theory_accuracy"] + swapped_donor["adequacy_correct"]
+    ) / 2.0
+    body = {
+        "schema_version": "jump.swap-comparison/v1",
+        "direction": direction,
+        "recipient_baseline_answer_sha256": hashlib.sha256(
+            canonical_json(answers["recipient_baseline"])
+        ).hexdigest(),
+        "donor_reference_answer_sha256": hashlib.sha256(
+            canonical_json(answers["donor_reference"])
+        ).hexdigest(),
+        "swapped_answer_sha256": hashlib.sha256(
+            canonical_json(answers["swapped"])
+        ).hexdigest(),
+        "recipient_target_sha256": hashlib.sha256(
+            canonical_json(targets["recipient"])
+        ).hexdigest(),
+        "donor_target_sha256": hashlib.sha256(canonical_json(targets["donor"])).hexdigest(),
+        "scoring_contract_sha256": scoring_contract_sha256,
+        "recipient_score": recipient_score,
+        "donor_score": donor_score,
+        "moved_toward_donor": donor_score > recipient_score,
+    }
+    result = SwapComparisonBinding(
+        **{key: value for key, value in body.items() if key != "schema_version"},
+        content_sha256=_hash(body),
+        _construction_token=_SWAP_COMPARISON_TOKEN,
+    )
+    result.verify()
+    return result
 
 
 def _ood_reasons(evidence: ComputedCheckpointEvidence) -> list[str]:

@@ -1,8 +1,9 @@
-"""Versioned, single-run interface for a Modal (or local) orchestrator.
+"""Canonical task-evidence producer for the shared experiment runner.
 
-This module deliberately does not schedule phases, retries, or GPUs. It accepts
-one run selected from the shared manifest and returns/writes one immutable-style
-result object. The Modal runner owns orchestration and run-directory lifecycle.
+This module does not interpret manifests, schedule phases, retry runs, write
+``jump.run-result/v1``, or launch GPUs. The shared runner owns those boundaries;
+this process accepts only its immutable per-attempt parameters/config and emits
+one versioned task-evidence result for verified promotion.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import hashlib
 import json
 import math
 import os
-import platform
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -51,9 +51,6 @@ from .synthetic import load_fixture
 from .vectors import dot, norm
 
 
-MANIFEST_SCHEMA_VERSION = "jump.experiments/v1"
-RESULT_SCHEMA_VERSION = "jump.run-result/v1"
-SUPPORTED_TASKS = {"jump_mechanistic.runner", "mechanistic_suite.synthetic"}
 MECHANISTIC_ARTIFACT_CONTRACT = {
     "activations": ("activation-evidence", "application/x-ndjson"),
     "interventions": ("intervention-control-evidence", "application/json"),
@@ -61,57 +58,6 @@ MECHANISTIC_ARTIFACT_CONTRACT = {
     "computed_gates": ("mechanistic-gate-evidence", "application/json"),
     "suite_summary": ("mechanistic-suite-summary", "application/json"),
 }
-
-
-def execute_run(
-    manifest: dict[str, Any], *, phase_id: str, run_id: str, output_dir: str | Path
-) -> dict[str, Any]:
-    """Validate and execute exactly one manifest run.
-
-    Parameters are read from ``run.task.parameters``. Layer/timepoint requests
-    may be on the run itself or inherited from ``manifest.preregistration``;
-    either way they must be subsets of the preregistered allowlists.
-    """
-    validate_manifest_header(manifest)
-    phase, run = _select_run(manifest, phase_id, run_id)
-    preregistration = manifest.get("preregistration", {})
-    allowed_layers = _string_list(preregistration, "layer_allowlist")
-    allowed_timepoints = _string_list(preregistration, "timepoint_allowlist")
-    selection = run.get("selection", {})
-    requested_layers = selection.get("layers", allowed_layers)
-    requested_timepoints = selection.get("timepoints", allowed_timepoints)
-    if not set(requested_layers) <= set(allowed_layers):
-        raise PermissionError("run requests a layer outside preregistration.layer_allowlist")
-    if not set(requested_timepoints) <= set(allowed_timepoints):
-        raise PermissionError("run requests a timepoint outside preregistration.timepoint_allowlist")
-    policy = CapturePolicy.from_allowlists(list(requested_layers), list(requested_timepoints))
-
-    task = run.get("task", {})
-    module = task.get("module") or task.get("command")
-    if module not in SUPPORTED_TASKS:
-        raise ValueError(f"unsupported task module: {module!r}")
-    parameters = dict(task.get("parameters", {}))
-    target = Path(output_dir)
-    target.mkdir(parents=True, exist_ok=True)
-    payload = synthetic_suite_task(parameters, policy=policy, output_dir=target)
-    manifest_sha = _sha256_bytes(_canonical_json(manifest))
-    result = {
-        "schema_version": RESULT_SCHEMA_VERSION,
-        "experiment_id": manifest["experiment_id"],
-        "phase_id": phase["id"],
-        "run_id": run["id"],
-        "status": "completed",
-        "metrics": payload["metrics"],
-        "artifacts": payload["artifacts"],
-        "provenance": {
-            "manifest_sha256": manifest_sha,
-            "run_id": run["id"],
-            "code_version": _code_version(),
-            "python": platform.python_version(),
-        },
-    }
-    _write_json(target / "result.json", result)
-    return result
 
 
 def synthetic_suite_task(
@@ -123,7 +69,15 @@ def synthetic_suite_task(
             "trusted gate booleans are forbidden; provide raw content-addressed evidence records: "
             + ", ".join(forbidden_gate_flags)
         )
-    fixture = load_fixture(parameters.get("fixture_path"))
+    forbidden_input_paths = sorted(
+        set(parameters) & {"fixture_path", "fixture_sha256", "input_root"}
+    )
+    if forbidden_input_paths:
+        raise ValueError(
+            "mechanistic fixture selection is runner-owned; external paths and hashes are forbidden: "
+            + ", ".join(forbidden_input_paths)
+        )
+    fixture = load_fixture()
     seed = int(parameters.get("seed", 17))
     checkpoint_id = str(parameters.get("checkpoint_id", "synthetic-primary"))
     replication_id = str(parameters.get("replication_id", "fixture-replication"))
@@ -582,14 +536,6 @@ def _fixture_g6_records(
     return records, ablations
 
 
-def run_manifest_file(
-    manifest_path: str | Path, *, phase_id: str, run_id: str, output_dir: str | Path
-) -> dict[str, Any]:
-    with Path(manifest_path).open(encoding="utf-8") as handle:
-        manifest = json.load(handle)
-    return execute_run(manifest, phase_id=phase_id, run_id=run_id, output_dir=output_dir)
-
-
 def execute_task_file(
     parameters_path: str | Path,
     *,
@@ -631,6 +577,10 @@ def execute_task_file(
         raise ValueError(f"unsupported mechanistic task: {task_name!r}")
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
+    if (target / "result.json").exists():
+        raise EvidenceError(
+            f"immutable evidence already exists: {target / 'result.json'}"
+        )
     if checkpoint_dir:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     payload = synthetic_suite_task(parameters, policy=policy, output_dir=target)
@@ -668,34 +618,6 @@ def validate_mechanistic_task_evidence(result: dict[str, Any]) -> None:
             or record.get("claim_eligible") is not False
         ):
             raise EvidenceError(f"mechanistic artifact metadata drifted for {name}")
-
-
-def validate_manifest_header(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
-        raise ValueError(f"schema_version must be {MANIFEST_SCHEMA_VERSION}")
-    if not isinstance(manifest.get("experiment_id"), str) or not manifest["experiment_id"]:
-        raise ValueError("experiment_id is required")
-    if not isinstance(manifest.get("phases"), list) or not manifest["phases"]:
-        raise ValueError("phases must be a nonempty array")
-    preregistration = manifest.get("preregistration")
-    if not isinstance(preregistration, dict):
-        raise ValueError("preregistration is required")
-    CapturePolicy.from_allowlists(
-        _string_list(preregistration, "layer_allowlist"),
-        _string_list(preregistration, "timepoint_allowlist"),
-    )
-
-
-def _select_run(
-    manifest: dict[str, Any], phase_id: str, run_id: str
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    phases = [phase for phase in manifest["phases"] if phase.get("id") == phase_id]
-    if len(phases) != 1:
-        raise ValueError(f"phase id must select exactly one phase: {phase_id}")
-    runs = [run for run in phases[0].get("runs", []) if run.get("id") == run_id]
-    if len(runs) != 1:
-        raise ValueError(f"run id must select exactly one run: {run_id}")
-    return phases[0], runs[0]
 
 
 def _metric(
@@ -785,36 +707,18 @@ def _write_json(path: Path, value: object) -> None:
     os.replace(temporary, path)
 
 
-def _code_version() -> str:
-    return os.environ.get("JUMP_CODE_VERSION", "unknown")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Execute a JUMP mechanistic task")
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--manifest")
-    mode.add_argument("--parameters")
-    parser.add_argument("--phase-id")
-    parser.add_argument("--run-id")
+    parser.add_argument("--parameters", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--checkpoint-dir")
     args = parser.parse_args(argv)
     try:
-        if args.parameters:
-            result = execute_task_file(
-                args.parameters,
-                output_dir=args.output_dir,
-                checkpoint_dir=args.checkpoint_dir,
-            )
-        else:
-            if not args.phase_id or not args.run_id:
-                parser.error("--manifest requires --phase-id and --run-id")
-            result = run_manifest_file(
-                args.manifest,
-                phase_id=args.phase_id,
-                run_id=args.run_id,
-                output_dir=args.output_dir,
-            )
+        result = execute_task_file(
+            args.parameters,
+            output_dir=args.output_dir,
+            checkpoint_dir=args.checkpoint_dir,
+        )
     except Exception as exc:
         print(json.dumps({"status": "failed", "error_type": type(exc).__name__, "error": str(exc)}), file=sys.stderr)
         return 1

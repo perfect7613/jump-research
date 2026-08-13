@@ -12,7 +12,7 @@ from jump_contracts import (
 from jump_mechanistic.gates import (
     BehaviorConditionRecord, GateDecision, InterventionOutcomeRecord, MediationArmRecord,
     PromotionAblationRecord, RegimeRecord, SwapOutcomeRecord,
-    evaluate_g1, evaluate_g3, evaluate_g5, evaluate_g6,
+    SWAP_SCORING_CONTRACT_SHA256, evaluate_g1, evaluate_g3, evaluate_g5, evaluate_g6,
 )
 from jump_mechanistic.metrics import ConfirmatoryEvidence, evaluate_confirmatory_gates, mediation_analysis
 
@@ -21,6 +21,18 @@ def digest(label): return hashlib.sha256(label.encode()).hexdigest()
 
 
 def clusters(n=40): return [f"world-{i}" for i in range(n)]
+
+
+def answer(adequate):
+    return {
+        "partition": [0, 0, 0, 1, 1, 1] if adequate else [0, 0, 1, 0, 1, 1],
+        "replacement_law": {
+            "same": "attract" if adequate else "repel",
+            "different": "repel" if adequate else "attract",
+            "exponent": 2 if adequate else 3,
+        },
+        "adequate": adequate,
+    }
 
 
 def learned_swap_material(i, direction):
@@ -50,7 +62,7 @@ def learned_swap_material(i, direction):
         ),
         decoded_image=f"decoded-{i}".encode(),
         decoded_image_media_type="image/png",
-        answer={"adequate": direction == "a_to_b", "episode": i},
+        answer=answer(direction == "a_to_b"),
     )
     source = "cached" if i % 2 == 0 else "live"
     envelope = seal_learned_latent_result(
@@ -66,18 +78,24 @@ def learned_swap_material(i, direction):
 
 def authentic_swap(i, cluster, direction):
     envelope, raw, donor, recipient, source = learned_swap_material(i, direction)
+    world_a, world_b = f"world-{i}-a", f"world-{i}-b"
+    recipient_answer = answer(recipient == world_a)
+    donor_answer = answer(donor == world_a)
     return SwapOutcomeRecord.from_learned_latent_envelope(
         envelope,
         latent_tensor_bytes=raw,
         checkpoint_id="primary",
         pair_id=f"p-{i}",
         cluster_id=cluster,
-        direction=direction,
-        moved_toward_donor=True,
         recipient_prompt_token_count=64,
         donor_prompt_token_count=64,
-        donor_world_id=donor,
-        recipient_world_id=recipient,
+        world_a_id=world_a,
+        world_b_id=world_b,
+        recipient_baseline_answer=recipient_answer,
+        donor_reference_answer=donor_answer,
+        recipient_target=recipient_answer,
+        donor_target=donor_answer,
+        scoring_contract_sha256=SWAP_SCORING_CONTRACT_SHA256,
         expected_source=source,
         expected_manifest_sha256=digest("manifest"),
     )
@@ -164,19 +182,21 @@ class GateTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "raw latent tensor artifact hash mismatch"):
             SwapOutcomeRecord.from_learned_latent_envelope(
                 envelope, latent_tensor_bytes=b"0" * len(raw), checkpoint_id="primary",
-                pair_id="p-0", cluster_id="world-0", direction="a_to_b",
-                moved_toward_donor=True, recipient_prompt_token_count=64,
-                donor_prompt_token_count=64, donor_world_id=donor,
-                recipient_world_id=recipient, expected_source=source,
+                pair_id="p-0", cluster_id="world-0", recipient_prompt_token_count=64,
+                donor_prompt_token_count=64, world_a_id="world-0-a", world_b_id="world-0-b",
+                recipient_baseline_answer=answer(False), donor_reference_answer=answer(True),
+                recipient_target=answer(False), donor_target=answer(True),
+                scoring_contract_sha256=SWAP_SCORING_CONTRACT_SHA256, expected_source=source,
                 expected_manifest_sha256=digest("manifest"),
             )
-        with self.assertRaisesRegex(ValueError, "donor lineage"):
+        with self.assertRaisesRegex(ValueError, "World A/B pair"):
             SwapOutcomeRecord.from_learned_latent_envelope(
                 envelope, latent_tensor_bytes=raw, checkpoint_id="primary",
-                pair_id="p-0", cluster_id="world-0", direction="a_to_b",
-                moved_toward_donor=True, recipient_prompt_token_count=64,
-                donor_prompt_token_count=64, donor_world_id="wrong-donor",
-                recipient_world_id=recipient, expected_source=source,
+                pair_id="p-0", cluster_id="world-0", recipient_prompt_token_count=64,
+                donor_prompt_token_count=64, world_a_id="wrong-donor", world_b_id=recipient,
+                recipient_baseline_answer=answer(False), donor_reference_answer=answer(True),
+                recipient_target=answer(False), donor_target=answer(True),
+                scoring_contract_sha256=SWAP_SCORING_CONTRACT_SHA256, expected_source=source,
                 expected_manifest_sha256=digest("manifest"),
             )
         with self.assertRaisesRegex(ValueError, "must be built through"):
@@ -188,7 +208,39 @@ class GateTests(unittest.TestCase):
                 injection_input_sha256=digest("z"), answer_world_latent_sha256=digest("z"),
                 delivered_world_latent_sha256=digest("z"), answer_sha256=digest("answer"),
                 envelope_payload_sha256=digest("payload"), donor_world_id="a",
-                recipient_world_id="b", _construction_token=None,
+                recipient_world_id="b", world_a_id="a", world_b_id="b",
+                comparison=None, _construction_token=None,
+            )
+
+    def test_authentic_swaps_reject_duplicate_envelope_flipped_label_and_outcome_spoof(self):
+        first = authentic_swap(0, "world-0", "a_to_b")
+        duplicated = copy.copy(first)
+        object.__setattr__(duplicated, "direction", "b_to_a")
+        object.__setattr__(duplicated, "donor_world_id", first.recipient_world_id)
+        object.__setattr__(duplicated, "recipient_world_id", first.donor_world_id)
+        with self.assertRaisesRegex(ValueError, "sealed answer and lineage|distinct mirrored"):
+            evaluate_g3(g3_records()[0], [first, duplicated], seed=17)
+
+        flipped = copy.copy(first)
+        object.__setattr__(flipped, "direction", "b_to_a")
+        with self.assertRaisesRegex(ValueError, "direction does not match"):
+            evaluate_g3(g3_records()[0], [flipped], seed=17)
+
+        spoofed = copy.copy(first)
+        object.__setattr__(spoofed, "moved_toward_donor", False)
+        with self.assertRaisesRegex(ValueError, "sealed answer and lineage"):
+            evaluate_g3(g3_records()[0], [spoofed], seed=17)
+
+        envelope, raw, _donor, _recipient, source = learned_swap_material(0, "a_to_b")
+        with self.assertRaisesRegex(ValueError, "scoring contract hash"):
+            SwapOutcomeRecord.from_learned_latent_envelope(
+                envelope, latent_tensor_bytes=raw, checkpoint_id="primary", pair_id="p-0",
+                cluster_id="world-0", recipient_prompt_token_count=64,
+                donor_prompt_token_count=64, world_a_id="world-0-a", world_b_id="world-0-b",
+                recipient_baseline_answer=answer(False), donor_reference_answer=answer(True),
+                recipient_target=answer(False), donor_target=answer(True),
+                scoring_contract_sha256=digest("spoofed-scorer"), expected_source=source,
+                expected_manifest_sha256=digest("manifest"),
             )
 
     def test_g5_requires_all_controls_both_directions_and_sham(self):

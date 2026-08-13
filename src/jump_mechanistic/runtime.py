@@ -27,6 +27,7 @@ PRIMARY_CONFIRMATORY_LAYER_INDICES = (7, 15, 23, 31, 39, 47)
 PRIMARY_CONFIRMATORY_MODULE_NAMES = tuple(
     f"model.layers.{index}" for index in PRIMARY_CONFIRMATORY_LAYER_INDICES
 )
+_CONFIRMATORY_FACTORY_TOKEN = object()
 
 
 class PatchMode(str, Enum):
@@ -160,13 +161,20 @@ class WorldModelRuntimeBinding:
     base_model_repo_id: str
     base_model_revision: str
     gemma_adapter_identity_sha256: str
+    verified_loader_attestation_sha256: str
 
     @classmethod
     def from_contracts(
         cls,
         component_manifest: Mapping[str, Any],
         load_record: Mapping[str, Any],
+        *,
+        verified_loader_attestation_sha256: str,
     ) -> "WorldModelRuntimeBinding":
+        if not _is_sha256(verified_loader_attestation_sha256):
+            raise EvidenceError(
+                "confirmatory runtime requires a canonical verified-loaded-model attestation"
+            )
         manifest = validate_world_model_component_manifest(component_manifest)
         record = validate_world_model_load_record(
             load_record,
@@ -186,6 +194,7 @@ class WorldModelRuntimeBinding:
             gemma_adapter_identity_sha256=manifest["components"]["gemma_adapter"][
                 "identity_sha256"
             ],
+            verified_loader_attestation_sha256=verified_loader_attestation_sha256,
         )
 
 
@@ -211,6 +220,7 @@ class ActivationProvenance:
     world_model_load_record_sha256: str | None
     world_model_repository_revision: str | None
     gemma_adapter_identity_sha256: str | None
+    verified_loader_attestation_sha256: str | None
     activation_sha256: str
     content_sha256: str
 
@@ -236,6 +246,7 @@ class ActivationProvenance:
             "world_model_load_record_sha256": self.world_model_load_record_sha256,
             "world_model_repository_revision": self.world_model_repository_revision,
             "gemma_adapter_identity_sha256": self.gemma_adapter_identity_sha256,
+            "verified_loader_attestation_sha256": self.verified_loader_attestation_sha256,
             "activation_sha256": self.activation_sha256,
         }
 
@@ -272,6 +283,11 @@ class PatchRun:
     hook_shape: tuple[int, ...]
     dtype: str
     device: str
+    target_world_model_manifest_sha256: str | None
+    target_world_model_load_record_sha256: str | None
+    target_world_model_repository_revision: str | None
+    target_gemma_adapter_identity_sha256: str | None
+    target_verified_loader_attestation_sha256: str | None
     output_sha256: str
     content_sha256: str
 
@@ -290,6 +306,11 @@ class PatchRun:
             "hook_shape": list(self.hook_shape),
             "dtype": self.dtype,
             "device": self.device,
+            "target_world_model_manifest_sha256": self.target_world_model_manifest_sha256,
+            "target_world_model_load_record_sha256": self.target_world_model_load_record_sha256,
+            "target_world_model_repository_revision": self.target_world_model_repository_revision,
+            "target_gemma_adapter_identity_sha256": self.target_gemma_adapter_identity_sha256,
+            "target_verified_loader_attestation_sha256": self.target_verified_loader_attestation_sha256,
             "output_sha256": self.output_sha256,
         }
 
@@ -311,33 +332,39 @@ class MechanisticRuntime:
         *,
         world_model_manifest: Mapping[str, Any] | None = None,
         world_model_load_record: Mapping[str, Any] | None = None,
+        verified_loader_attestation_sha256: str | None = None,
+        _verified_factory_token: object | None = None,
     ) -> None:
         self.model = model
         self.manifest = manifest
-        if (world_model_manifest is None) != (world_model_load_record is None):
+        if manifest.study_scope != "synthetic" and _verified_factory_token is not _CONFIRMATORY_FACTORY_TOKEN:
             raise EvidenceError(
-                "world model component manifest and load record must be supplied together"
+                "confirmatory mechanistic runtime is disabled until the canonical verified "
+                "checkpoint loader and live hook-map audit are implemented in S1"
+            )
+        if len(
+            [
+                value
+                for value in (
+                    world_model_manifest,
+                    world_model_load_record,
+                    verified_loader_attestation_sha256,
+                )
+                if value is not None
+            ]
+        ) not in {0, 3}:
+            raise EvidenceError(
+                "world model manifest, load record, and verified loader attestation must be supplied together"
             )
         self.world_model_binding = (
             WorldModelRuntimeBinding.from_contracts(
                 world_model_manifest,
                 world_model_load_record,
+                verified_loader_attestation_sha256=verified_loader_attestation_sha256,
             )
             if world_model_manifest is not None and world_model_load_record is not None
             else None
         )
-        if manifest.study_scope != "synthetic":
-            if self.world_model_binding is None:
-                raise EvidenceError(
-                    "confirmatory mechanistic runtime requires validated shared world model contracts"
-                )
-            if (
-                manifest.model_id != self.world_model_binding.base_model_repo_id
-                or manifest.model_revision != self.world_model_binding.base_model_revision
-            ):
-                raise EvidenceError(
-                    "hook manifest base model identity does not match the shared world model contract"
-                )
         if getattr(model, "training", False):
             raise RuntimeError("mechanistic runtime requires model.eval() before hook registration")
         self.hook_root = _base_model(model) if manifest.peft_base_model else model
@@ -412,6 +439,9 @@ class MechanisticRuntime:
             "gemma_adapter_identity_sha256": (
                 binding.gemma_adapter_identity_sha256 if binding else None
             ),
+            "verified_loader_attestation_sha256": (
+                binding.verified_loader_attestation_sha256 if binding else None
+            ),
             "activation_sha256": _sha256(values),
         }
         provenance = ActivationProvenance(
@@ -426,6 +456,9 @@ class MechanisticRuntime:
             world_model_load_record_sha256=unsigned["world_model_load_record_sha256"],
             world_model_repository_revision=unsigned["world_model_repository_revision"],
             gemma_adapter_identity_sha256=unsigned["gemma_adapter_identity_sha256"],
+            verified_loader_attestation_sha256=unsigned[
+                "verified_loader_attestation_sha256"
+            ],
             activation_sha256=unsigned["activation_sha256"], content_sha256=_sha256(unsigned),
         )
         snapshot = ActivationSnapshot(values, provenance)
@@ -460,6 +493,18 @@ class MechanisticRuntime:
             or source.provenance.tokenizer_revision != self.manifest.tokenizer_revision
         ):
             raise ValueError("source activation model/tokenizer provenance does not match runtime")
+        expected_binding = _binding_tuple(self.world_model_binding)
+        source_binding = (
+            source.provenance.world_model_manifest_sha256,
+            source.provenance.world_model_load_record_sha256,
+            source.provenance.world_model_repository_revision,
+            source.provenance.gemma_adapter_identity_sha256,
+            source.provenance.verified_loader_attestation_sha256,
+        )
+        if source_binding != expected_binding:
+            raise ValueError(
+                "source activation distribution/load/adapter identity does not match patch target runtime"
+            )
         site = self.manifest.select(site_id, timepoint)
         if (source.provenance.hook_site_id, source.provenance.timepoint) != (site.site_id, site.timepoint):
             raise ValueError("source activation node does not match fixed manifest node")
@@ -492,6 +537,7 @@ class MechanisticRuntime:
                 "S3 generation requires a separately validated persistent-hook implementation"
             )
         shape, dtype, device = observed[0]
+        binding = self.world_model_binding
         output_sha256 = _sha256(_hashable_output(output))
         unsigned = {
             "schema_version": "jump.activation-patch/v1",
@@ -503,13 +549,32 @@ class MechanisticRuntime:
             "site_id": site.site_id, "timepoint": site.timepoint.value,
             "hook_name": site.module_name, "hook_shape": list(shape),
             "dtype": dtype, "device": device, "output_sha256": output_sha256,
+            "target_world_model_manifest_sha256": (
+                binding.component_manifest_sha256 if binding else None
+            ),
+            "target_world_model_load_record_sha256": binding.load_record_sha256 if binding else None,
+            "target_world_model_repository_revision": binding.repository_revision if binding else None,
+            "target_gemma_adapter_identity_sha256": (
+                binding.gemma_adapter_identity_sha256 if binding else None
+            ),
+            "target_verified_loader_attestation_sha256": (
+                binding.verified_loader_attestation_sha256 if binding else None
+            ),
         }
         patch_run = PatchRun(
             mode=patch_mode, scale=float(scale), source=source,
             source_prompt_sha256=source_prompt.content_sha256,
             target_prompt_sha256=target_prompt.content_sha256,
             site_id=site.site_id, timepoint=site.timepoint, hook_name=site.module_name,
-            hook_shape=shape, dtype=dtype, device=device, output_sha256=output_sha256,
+            hook_shape=shape, dtype=dtype, device=device,
+            target_world_model_manifest_sha256=unsigned["target_world_model_manifest_sha256"],
+            target_world_model_load_record_sha256=unsigned["target_world_model_load_record_sha256"],
+            target_world_model_repository_revision=unsigned["target_world_model_repository_revision"],
+            target_gemma_adapter_identity_sha256=unsigned["target_gemma_adapter_identity_sha256"],
+            target_verified_loader_attestation_sha256=unsigned[
+                "target_verified_loader_attestation_sha256"
+            ],
+            output_sha256=output_sha256,
             content_sha256=_sha256(unsigned),
         )
         patch_run.verify()
@@ -540,6 +605,20 @@ def normalized_logit_patch_score(
         "corrupt_logit_difference": float(corrupt_logit_difference),
         "patched_logit_difference": float(patched_logit_difference),
     }
+
+
+def _binding_tuple(
+    binding: WorldModelRuntimeBinding | None,
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    if binding is None:
+        return (None, None, None, None, None)
+    return (
+        binding.component_manifest_sha256,
+        binding.load_record_sha256,
+        binding.repository_revision,
+        binding.gemma_adapter_identity_sha256,
+        binding.verified_loader_attestation_sha256,
+    )
 
 
 def _base_model(model: Any) -> Any:
@@ -679,3 +758,11 @@ def _inference_context() -> Any:
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(json.dumps(_lists(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )

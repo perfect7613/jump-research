@@ -14,7 +14,12 @@ from jump_contracts import (
 )
 
 from jump_mechanistic.boundaries import BoundaryManifest, require_matched_prompt_lengths, resolve_boundaries
-from jump_mechanistic.runtime import HookManifest, MechanisticRuntime, normalized_logit_patch_score
+from jump_mechanistic.runtime import (
+    HookManifest,
+    MechanisticRuntime,
+    WorldModelRuntimeBinding,
+    normalized_logit_patch_score,
+)
 
 
 SENTINELS = {f"T{i}": {"text": f"<{i}>", "token_ids": [10 + i]} for i in range(5)}
@@ -384,72 +389,54 @@ class RuntimeTests(unittest.TestCase):
                 site_id="L0.resid", timepoint="T2", run_kind="clean",
             )
 
-    def test_confirmatory_runtime_requires_and_records_shared_component_contracts(self):
+    def test_confirmatory_runtime_is_disabled_until_canonical_s1_loader(self):
         confirmatory = hook_manifest(
             peft=True,
             study_scope="confirmatory_secondary",
             model_id="google/gemma-test",
             model_revision="b" * 40,
         )
-        with self.assertRaisesRegex(EvidenceError, "requires validated shared"):
+        with self.assertRaisesRegex(EvidenceError, "disabled until the canonical"):
             MechanisticRuntime(FakePeftModel(), confirmatory)
 
         with tempfile.TemporaryDirectory() as directory:
             component_manifest, load_record = world_model_contract(Path(directory))
-            runtime = MechanisticRuntime(
-                FakePeftModel(),
-                confirmatory,
-                world_model_manifest=component_manifest,
-                world_model_load_record=load_record,
+            binding = WorldModelRuntimeBinding.from_contracts(
+                component_manifest,
+                load_record,
+                verified_loader_attestation_sha256="d" * 64,
             )
-            _output, snapshot = runtime.capture(
-                inputs=self.clean_inputs,
-                resolved_prompt=self.clean,
-                episode_id="component-bound",
-                site_id="L0.resid",
-                timepoint="T2",
-                run_kind="clean",
-            )
-            provenance = snapshot.provenance
             self.assertEqual(
-                provenance.world_model_manifest_sha256,
+                binding.component_manifest_sha256,
                 component_manifest["manifest_sha256"],
             )
             self.assertEqual(
-                provenance.world_model_load_record_sha256,
+                binding.load_record_sha256,
                 load_record["load_record_sha256"],
             )
             self.assertEqual(
-                provenance.gemma_adapter_identity_sha256,
+                binding.gemma_adapter_identity_sha256,
                 component_manifest["components"]["gemma_adapter"]["identity_sha256"],
             )
             self.assertFalse(
                 component_manifest["load_contract"]["allow_remote_code"]
             )
-            snapshot.verify()
-
-            wrong_identity = hook_manifest(
-                peft=True,
-                study_scope="confirmatory_secondary",
-                model_id="google/not-the-loaded-model",
-                model_revision="b" * 40,
-            )
-            with self.assertRaisesRegex(EvidenceError, "base model identity"):
+            with self.assertRaisesRegex(EvidenceError, "disabled until the canonical"):
                 MechanisticRuntime(
                     FakePeftModel(),
-                    wrong_identity,
+                    confirmatory,
                     world_model_manifest=component_manifest,
                     world_model_load_record=load_record,
+                    verified_loader_attestation_sha256="d" * 64,
                 )
 
             tampered = copy.deepcopy(load_record)
             tampered["repository"]["resolved_revision"] = "d" * 40
             with self.assertRaises(EvidenceError):
-                MechanisticRuntime(
-                    FakePeftModel(),
-                    confirmatory,
-                    world_model_manifest=component_manifest,
-                    world_model_load_record=tampered,
+                WorldModelRuntimeBinding.from_contracts(
+                    component_manifest,
+                    tampered,
+                    verified_loader_attestation_sha256="d" * 64,
                 )
 
     def test_confirmatory_runtime_rejects_non_live_component_contract(self):
@@ -464,12 +451,68 @@ class RuntimeTests(unittest.TestCase):
                 Path(directory), live_ready=False
             )
             with self.assertRaisesRegex(EvidenceError, "live-ready"):
-                MechanisticRuntime(
-                    FakePeftModel(),
-                    confirmatory,
-                    world_model_manifest=component_manifest,
-                    world_model_load_record=load_record,
+                WorldModelRuntimeBinding.from_contracts(
+                    component_manifest,
+                    load_record,
+                    verified_loader_attestation_sha256="d" * 64,
                 )
+
+    def test_patch_rejects_cross_adapter_or_loader_attestation_mix_and_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            component_manifest, load_record = world_model_contract(Path(directory))
+            synthetic_bound = hook_manifest(
+                peft=True,
+                study_scope="synthetic",
+            )
+            source_runtime = MechanisticRuntime(
+                FakePeftModel(),
+                synthetic_bound,
+                world_model_manifest=component_manifest,
+                world_model_load_record=load_record,
+                verified_loader_attestation_sha256="d" * 64,
+            )
+            _output, source = source_runtime.capture(
+                inputs=self.clean_inputs,
+                resolved_prompt=self.clean,
+                episode_id="cross-loader",
+                site_id="L0.resid",
+                timepoint="T2",
+                run_kind="clean",
+            )
+            target_runtime = MechanisticRuntime(
+                FakePeftModel(),
+                synthetic_bound,
+                world_model_manifest=component_manifest,
+                world_model_load_record=load_record,
+                verified_loader_attestation_sha256="e" * 64,
+            )
+            with self.assertRaisesRegex(ValueError, "distribution/load/adapter identity"):
+                target_runtime.patch(
+                    inputs=self.corrupt_inputs,
+                    target_prompt=self.corrupt,
+                    source_prompt=self.clean,
+                    source=source,
+                    site_id="L0.resid",
+                    timepoint="T2",
+                    mode="denoising",
+                )
+
+            same_runtime_output, patch = source_runtime.patch(
+                inputs=self.corrupt_inputs,
+                target_prompt=self.corrupt,
+                source_prompt=self.clean,
+                source=source,
+                site_id="L0.resid",
+                timepoint="T2",
+                mode="denoising",
+            )
+            self.assertIsNotNone(same_runtime_output)
+            self.assertEqual(
+                patch.target_gemma_adapter_identity_sha256,
+                component_manifest["components"]["gemma_adapter"]["identity_sha256"],
+            )
+            self.assertEqual(patch.target_verified_loader_attestation_sha256, "d" * 64)
+            patch.verify()
 
     def test_multi_forward_generation_is_explicitly_unsupported(self):
         runtime = MechanisticRuntime(DoubleFireModel(), hook_manifest())
