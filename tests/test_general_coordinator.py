@@ -129,6 +129,51 @@ def test_confirmation_must_match_the_human_visible_plan():
         coordinator.confirm(confirmation)
 
 
+def test_queue_review_repairs_missing_schema_once_using_only_measured_results(monkeypatch):
+    from jump_workbench import gemma_planner
+
+    prompts = []
+    responses = iter([
+        {"interpretation": "Missing required fields."},
+        {
+            "disposition": "retain",
+            "interpretation": "The intervention produced a lower mean queue length in this simulation.",
+            "next_plan_sha256": None,
+        },
+    ])
+
+    def fake_generate(_runtime, prompt, *, max_new_tokens, deterministic=False):
+        prompts.append((prompt, max_new_tokens, deterministic))
+        return next(responses)
+
+    monkeypatch.setattr(gemma_planner, "_generate_json", fake_generate)
+    revision = gemma_planner._generate_review(
+        {},
+        {
+            "plan": {"hypothesis": "PRIVATE TARGET: capacity lowers queue length"},
+            "prediction": {"summary": "PRIVATE PREDICTION"},
+            "measurements": [
+                {"condition_id": "capacity_4", "values": {"average_queue_length": 12.0}},
+                {"condition_id": "capacity_6", "values": {"average_queue_length": 7.0}},
+            ],
+            "comparisons": [{"id": "queue_effect", "estimate": -5.0}],
+            "source": "PRIVATE SOURCE",
+        },
+    )
+
+    assert revision == {
+        "disposition": "retain",
+        "interpretation": "The intervention produced a lower mean queue length in this simulation.",
+        "next_plan_sha256": None,
+    }
+    assert len(prompts) == 2
+    assert all(item[2] is True for item in prompts)
+    assert "average_queue_length" in prompts[1][0]
+    assert "PRIVATE TARGET" not in prompts[1][0]
+    assert "PRIVATE PREDICTION" not in prompts[1][0]
+    assert "PRIVATE SOURCE" not in prompts[1][0]
+
+
 def test_http_gateway_rejects_unauthenticated_requests_before_action(monkeypatch):
     from fastapi.testclient import TestClient
 

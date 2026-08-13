@@ -35,9 +35,10 @@ def generate_with_frozen_gemma(
         if set(proposal) == {"unsupported"}:
             return proposal
         result = compile_model_proposal(proposal)
+    elif action == "review":
+        result = _generate_review(_RUNTIME, payload)
     else:
-        prompt = {"predict": _prediction_prompt, "review": _review_prompt}[action](payload)
-        result = _generate_json(_RUNTIME, prompt, max_new_tokens=700)
+        result = _generate_json(_RUNTIME, _prediction_prompt(payload), max_new_tokens=700)
     if set(result) == {"unsupported"}:
         reason = result["unsupported"]
         raise ValueError(f"unsupported experiment: {reason}")
@@ -73,7 +74,13 @@ def _load_runtime(cache_root: Path, commit_cache: Callable[[], None]) -> dict[st
     return {"tokenizer": tokenizer, "model": model}
 
 
-def _generate_json(runtime: dict[str, Any], prompt: str, *, max_new_tokens: int) -> dict[str, Any]:
+def _generate_json(
+    runtime: dict[str, Any],
+    prompt: str,
+    *,
+    max_new_tokens: int,
+    deterministic: bool = False,
+) -> dict[str, Any]:
     import torch
 
     tokenizer = runtime["tokenizer"]
@@ -86,19 +93,20 @@ def _generate_json(runtime: dict[str, Any], prompt: str, *, max_new_tokens: int)
     encoded = tokenizer(formatted, return_tensors="pt", add_special_tokens=False)
     input_ids = encoded["input_ids"].to("cuda")
     attention_mask = encoded.get("attention_mask", torch.ones_like(input_ids)).to("cuda")
+    generation = {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "do_sample": not deterministic,
+        "repetition_penalty": 1.08,
+        "num_beams": 1,
+        "max_new_tokens": max_new_tokens,
+        "eos_token_id": tokenizer.eos_token_id,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+    if not deterministic:
+        generation.update({"temperature": 0.2, "top_p": 0.9})
     with torch.inference_mode():
-        output = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            do_sample=True,
-            temperature=0.2,
-            top_p=0.9,
-            repetition_penalty=1.08,
-            num_beams=1,
-            max_new_tokens=max_new_tokens,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.eos_token_id,
-        )
+        output = model.generate(**generation)
     text = tokenizer.decode(output[0, input_ids.shape[1] :], skip_special_tokens=True)
     return _extract_json_object(text)
 
@@ -119,6 +127,47 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         json.dumps(value, allow_nan=False)
         return value
     raise ValueError(f"model did not return one complete parseable JSON object (chars={len(text)}, tail={text[-300:]!r})")
+
+
+def _generate_review(runtime: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate one closed revision object, with one measurements-only repair attempt."""
+    try:
+        candidate = _generate_json(
+            runtime,
+            _review_prompt(payload),
+            max_new_tokens=320,
+            deterministic=True,
+        )
+        return _validate_revision_candidate(candidate)
+    except (TypeError, ValueError):
+        repaired = _generate_json(
+            runtime,
+            _review_repair_prompt(payload),
+            max_new_tokens=320,
+            deterministic=True,
+        )
+        return _validate_revision_candidate(repaired)
+
+
+def _validate_revision_candidate(value: Any) -> dict[str, Any]:
+    required = {"disposition", "interpretation", "next_plan_sha256"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError("review response does not match the closed revision schema")
+    if value["disposition"] not in {"retain", "revise", "reject"}:
+        raise ValueError("review disposition is invalid")
+    interpretation = value["interpretation"]
+    if not isinstance(interpretation, str) or not interpretation.strip() or len(interpretation) > 500:
+        raise ValueError("review interpretation must contain 1 through 500 characters")
+    # This coordinator does not construct a successor plan during review. The
+    # frozen ExperimentRun v1 contract permits null, so the server—not the
+    # model—sets the only valid value for this terminal run.
+    if value["next_plan_sha256"] is not None:
+        raise ValueError("review cannot name a successor plan that the server did not construct")
+    return {
+        "disposition": value["disposition"],
+        "interpretation": interpretation.strip(),
+        "next_plan_sha256": None,
+    }
 
 
 def _plan_prompt(request: dict[str, Any]) -> str:
@@ -152,6 +201,20 @@ def _review_prompt(payload: dict[str, Any]) -> str:
     return f"""Review this completed toy simulation using only the supplied prediction, measurements, and computed comparisons:
 {grounded}
 Return exactly one JSON object: {{"disposition":"retain"|"revise"|"reject","interpretation":"at most 500 characters, report what the simulated measurements do and do not support","next_plan_sha256":null}}. Do not infer real-world effects, mechanisms, scientific validity, or facts not present in the data. Do not include markdown."""
+
+
+def _review_repair_prompt(payload: dict[str, Any]) -> str:
+    measured = json.dumps(
+        {
+            "measurements": payload.get("measurements"),
+            "comparisons": payload.get("comparisons"),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return f"""Your previous revision object did not satisfy the closed response schema. Repair it using only these measured toy-simulation results:
+{measured}
+Return exactly one JSON object with exactly these three keys: {{"disposition":"retain"|"revise"|"reject","interpretation":"1 to 500 characters grounded only in the measurements and comparisons","next_plan_sha256":null}}. The server has not constructed a successor plan, so next_plan_sha256 must be null. Do not include markdown or any other keys."""
 
 
 __all__ = [
