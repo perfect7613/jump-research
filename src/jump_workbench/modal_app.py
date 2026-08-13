@@ -64,6 +64,27 @@ coordinator_state = modal.Dict.from_name("jump-general-coordinator-state-v1", cr
 visual_coordinator_state = modal.Dict.from_name("jump-visual-coordinator-state-v2", create_if_missing=True)
 
 
+def _open_visual_result(compressed: bytes) -> dict[str, Any]:
+    """Open one bounded zlib stream without allocating beyond the JSON cap."""
+    if not isinstance(compressed, bytes) or len(compressed) > 200_000:
+        raise ValueError("visual engine returned an invalid compressed result")
+    import zlib
+
+    opener = zlib.decompressobj()
+    opened = opener.decompress(compressed, 1_000_001)
+    if (
+        len(opened) > 1_000_000
+        or opener.unconsumed_tail
+        or not opener.eof
+        or opener.unused_data
+    ):
+        raise ValueError("opened visual result exceeds the canonical JSON cap")
+    result = json.loads(opened)
+    if not isinstance(result, dict):
+        raise ValueError("opened visual result must be a JSON object")
+    return result
+
+
 @app.function(
     image=simulator_image,
     cpu=1.0,
@@ -259,14 +280,7 @@ def visual_coordinator_compute_v2(action: str, body: dict[str, Any]) -> dict[str
         started_at = datetime.now(timezone.utc)
         call = execute_visual_spec_v2.spawn(spec, confirmation, prediction)
         compressed = call.get(timeout=70)
-        if not isinstance(compressed, bytes) or len(compressed) > 200_000:
-            raise ValueError("visual engine returned an invalid compressed result")
-        import zlib
-
-        opened = zlib.decompress(compressed)
-        if len(opened) > 1_000_000:
-            raise ValueError("opened visual result exceeds the canonical JSON cap")
-        result = json.loads(opened)
+        result = _open_visual_result(compressed)
         return {
             "modal_call_id": call.object_id,
             "started_at": started_at,

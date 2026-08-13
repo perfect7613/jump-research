@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from datetime import datetime, timezone
+from threading import RLock
 from typing import Any, Callable, MutableMapping
 
 from jump_contracts.thought_experiments import (
@@ -22,7 +24,13 @@ from jump_contracts.thought_experiments import (
 from .workflow import FrozenModel, WorkbenchError, validate_user_intent
 
 QUESTION_FIELDS = frozenset({"schema_version", "request_id", "session_id", "intent", "seed", "repetitions"})
-CONFIRMATION_FIELDS = frozenset({"schema_version", "spec_id", "spec_sha256", "confirmed"})
+CONFIRMATION_FIELDS = frozenset({
+    "schema_version", "request_id", "session_id", "spec_id", "spec_sha256",
+    "confirmation_token", "confirmed",
+})
+MAX_PENDING_SPECS = 128
+PENDING_TTL_SECONDS = 15 * 60
+_STATE_LOCK = RLock()
 
 
 class VisualCoordinatorError(ValueError):
@@ -62,6 +70,9 @@ class VisualCoordinator:
 
     def compile(self, body: Any) -> dict[str, Any]:
         request = _validate_question(body)
+        with _STATE_LOCK:
+            if _prune_state(self.state, self.now()) >= MAX_PENDING_SPECS:
+                raise VisualCoordinatorError("visual confirmation capacity is currently full")
         try:
             generated = self.model_generate("visual_spec", request)
             if not isinstance(generated, dict):
@@ -89,10 +100,28 @@ class VisualCoordinator:
                 measurements=generated["measurements"],
                 visualization=generated["visualization"],
             )
-        except (TypeError, ValueError, WorkbenchError, ThoughtExperimentContractError) as exc:
+        except (
+            AttributeError,
+            IndexError,
+            KeyError,
+            TypeError,
+            ValueError,
+            WorkbenchError,
+            ThoughtExperimentContractError,
+        ) as exc:
             raise VisualCoordinatorError(f"visual compiler output rejected: {exc}") from exc
-        planned = {"state": "awaiting_confirmation", "request": request, "spec": spec}
-        self.state[spec["spec_id"]] = planned
+        confirmation_token = secrets.token_hex(32)
+        planned = {
+            "state": "awaiting_confirmation",
+            "request": request,
+            "spec": spec,
+            "expires_at": self.now().timestamp() + PENDING_TTL_SECONDS,
+        }
+        with _STATE_LOCK:
+            active_records = _prune_state(self.state, self.now())
+            if active_records >= MAX_PENDING_SPECS:
+                raise VisualCoordinatorError("visual confirmation capacity is currently full")
+            self.state[confirmation_token] = planned
         return {
             "schema_version": SPEC_RESPONSE_VERSION,
             "status": "awaiting_confirmation",
@@ -102,29 +131,45 @@ class VisualCoordinator:
             "model": self.model_identity,
             "confirmation": {
                 "schema_version": CONFIRMATION_VERSION,
+                "request_id": request["request_id"],
+                "session_id": request["session_id"],
                 "spec_id": spec["spec_id"],
                 "spec_sha256": spec["spec_sha256"],
+                "confirmation_token": confirmation_token,
                 "confirmed": False,
             },
         }
 
     def confirm(self, body: Any) -> dict[str, Any]:
         confirmation = _validate_confirmation(body)
-        planned = self.state.get(confirmation["spec_id"])
-        if not isinstance(planned, dict) or planned.get("state") != "awaiting_confirmation":
-            raise VisualCoordinatorError("spec is unknown or no longer awaiting confirmation")
-        spec = validate_experiment_spec(planned["spec"])
-        if confirmation["spec_sha256"] != spec["spec_sha256"]:
-            raise VisualCoordinatorError("confirmation does not bind the sealed ExperimentSpec")
+        token = confirmation["confirmation_token"]
+        with _STATE_LOCK:
+            _prune_state(self.state, self.now())
+            planned = self.state.get(token)
+            if not isinstance(planned, dict) or planned.get("state") != "awaiting_confirmation":
+                raise VisualCoordinatorError("spec is unknown or no longer awaiting confirmation")
+            request = planned.get("request")
+            if not isinstance(request, dict) or any(
+                confirmation[key] != request.get(key) for key in ("request_id", "session_id")
+            ):
+                raise VisualCoordinatorError("confirmation does not bind the originating request and session")
+            spec = validate_experiment_spec(planned["spec"])
+            if (
+                confirmation["spec_id"] != spec["spec_id"]
+                or confirmation["spec_sha256"] != spec["spec_sha256"]
+            ):
+                raise VisualCoordinatorError("confirmation does not bind the sealed ExperimentSpec")
+            # The deployed coordinator accepts one input in one container. This
+            # transition occurs before either remote model or simulator work, so
+            # a queued duplicate cannot pass the awaiting-confirmation guard.
+            self.state[token] = {
+                **planned,
+                "state": "executing",
+                "expires_at": self.now().timestamp() + PENDING_TTL_SECONDS,
+            }
         try:
             prediction = _validate_prediction(self.model_generate("visual_predict", {"spec": spec}), spec)
             prediction_recorded_at = _timestamp(self.now())
-            self.state[spec["spec_id"]] = {
-                **planned,
-                "state": "prediction_ready",
-                "prediction": prediction,
-                "prediction_recorded_at": prediction_recorded_at,
-            }
             execution = self.simulate(spec, prediction, prediction_recorded_at)
             if not isinstance(execution, dict) or set(execution) != {
                 "modal_call_id", "started_at", "completed_at", "result"
@@ -168,12 +213,20 @@ class VisualCoordinator:
             )
         except VisualCoordinatorError:
             raise
-        except (TypeError, ValueError, ThoughtExperimentContractError) as exc:
+        except (
+            AttributeError,
+            IndexError,
+            KeyError,
+            TypeError,
+            ValueError,
+            ThoughtExperimentContractError,
+        ) as exc:
             raise VisualCoordinatorError(f"confirmed visual experiment failed closed: {exc}") from exc
-        request = planned["request"]
-        self.state[spec["spec_id"]] = {
-            "state": "completed", "request": request, "spec": spec, "run": run,
-        }
+        finally:
+            # Confirmation capabilities are single-use. Completed and failed
+            # records do not retain request text, specs, or run payloads.
+            with _STATE_LOCK:
+                self.state.pop(token, None)
         return {
             "schema_version": RUN_RESPONSE_VERSION,
             "status": "completed",
@@ -210,7 +263,17 @@ def _validate_confirmation(value: Any) -> dict[str, Any]:
         raise VisualCoordinatorError(f"v2 confirmation must contain exactly {sorted(CONFIRMATION_FIELDS)}")
     if value["schema_version"] != CONFIRMATION_VERSION or value["confirmed"] is not True:
         raise VisualCoordinatorError("v2 confirmation must explicitly confirm the exact spec")
-    if not isinstance(value["spec_id"], str) or not isinstance(value["spec_sha256"], str):
+    for key in ("request_id", "session_id", "spec_id", "spec_sha256"):
+        if not isinstance(value[key], str) or not value[key] or len(value[key]) > 128:
+            raise VisualCoordinatorError("v2 confirmation identities must be bounded text")
+    token = value["confirmation_token"]
+    if (
+        not isinstance(token, str)
+        or len(token) != 64
+        or any(character not in "0123456789abcdef" for character in token)
+    ):
+        raise VisualCoordinatorError("v2 confirmation token is invalid")
+    if len(value["spec_sha256"]) != 64:
         raise VisualCoordinatorError("v2 confirmation identities must be text")
     return dict(value)
 
@@ -240,34 +303,63 @@ def _validate_revision(value: Any) -> dict[str, Any]:
 def _complete_nullable_spec_fields(generated: dict[str, Any]) -> dict[str, Any]:
     """Materialize required nullable keys; never infer an operation or value."""
     value = dict(generated)
-    world = dict(value["world"])
-    world["entities"] = [
-        {
+    world_value = value.get("world")
+    if not isinstance(world_value, dict) or not isinstance(world_value.get("entities"), list):
+        raise VisualCoordinatorError("compiler world must contain an entity list")
+    world = dict(world_value)
+    entities = []
+    for item in world["entities"]:
+        if not isinstance(item, dict) or not isinstance(item.get("initial_state"), dict):
+            raise VisualCoordinatorError("compiler entity initial_state must be an object")
+        initial_state = item["initial_state"]
+        numeric = initial_state.get("numeric", {})
+        categorical = initial_state.get("categorical", {})
+        if not isinstance(numeric, dict) or not isinstance(categorical, dict):
+            raise VisualCoordinatorError("compiler entity state maps must be objects")
+        entities.append({
             **item,
-            "initial_state": {
-                "numeric": item["initial_state"].get("numeric", {}),
-                "categorical": item["initial_state"].get("categorical", {}),
-            },
-        }
-        for item in world["entities"]
-    ]
+            "initial_state": {"numeric": numeric, "categorical": categorical},
+        })
+    world["entities"] = entities
     value["world"] = world
-    dynamics = dict(value["dynamics"])
-    dynamics["rules"] = [
-        {**item, "target_type": item.get("target_type")}
-        for item in dynamics["rules"]
-    ]
+    dynamics_value = value.get("dynamics")
+    if not isinstance(dynamics_value, dict) or not isinstance(dynamics_value.get("rules"), list):
+        raise VisualCoordinatorError("compiler dynamics must contain a rule list")
+    dynamics = dict(dynamics_value)
+    rules = []
+    for item in dynamics["rules"]:
+        if not isinstance(item, dict):
+            raise VisualCoordinatorError("compiler rules must be objects")
+        rules.append({**item, "target_type": item.get("target_type")})
+    dynamics["rules"] = rules
     value["dynamics"] = dynamics
-    value["measurements"] = [
-        {
-            **item,
-            "entity_type": item.get("entity_type"),
-            "state": item.get("state"),
-            "category": item.get("category"),
-        }
-        for item in value["measurements"]
-    ]
+    measurements = value.get("measurements")
+    if not isinstance(measurements, list) or any(not isinstance(item, dict) for item in measurements):
+        raise VisualCoordinatorError("compiler measurements must be an object list")
+    value["measurements"] = [{
+        **item,
+        "entity_type": item.get("entity_type"),
+        "state": item.get("state"),
+        "category": item.get("category"),
+    } for item in measurements]
     return value
+
+
+def _prune_state(state: MutableMapping[str, Any], now: datetime) -> int:
+    """Remove expired or legacy records before accepting externally reachable work."""
+    cutoff = now.timestamp()
+    try:
+        items = list(state.items())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise VisualCoordinatorError("visual confirmation state is unavailable") from exc
+    active_records = 0
+    for key, record in items:
+        expires_at = record.get("expires_at") if isinstance(record, dict) else None
+        if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool) or expires_at <= cutoff:
+            state.pop(key, None)
+        else:
+            active_records += 1
+    return active_records
 
 
 def _timestamp(value: datetime) -> str:

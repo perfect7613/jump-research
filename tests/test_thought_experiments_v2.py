@@ -11,11 +11,18 @@ from jump_contracts.thought_experiments import (
     THOUGHT_EXPERIMENT_RUN_SCHEMA_SHA256,
     ThoughtExperimentContractError,
     build_experiment_spec,
+    build_thought_experiment_run,
     validate_thought_experiment_run,
 )
-from jump_workbench.gemma_planner import BASE_REPO_ID, BASE_REVISION, TRANSFORMERS_REVISION
+from jump_workbench.gemma_planner import (
+    BASE_REPO_ID,
+    BASE_REVISION,
+    TRANSFORMERS_REVISION,
+    _normalize_visual_prediction,
+    _validate_visual_review,
+)
 from jump_workbench.visual_coordinator import VisualCoordinator, VisualCoordinatorError
-from jump_workbench.visual_engine import execute_visual_spec
+from jump_workbench.visual_engine import _apply_boundary, _graph_contagion, execute_visual_spec
 from jump_workbench.workflow import FrozenModel
 
 
@@ -74,29 +81,61 @@ def test_same_visual_dsl_executes_particle_and_graph_contagion_families():
     fields["question"] = "Does lowering transmission slow contagion on a ring?"
     fields["hypothesis"] = "Lower transmission produces fewer infected agents."
     fields["world"]["graph"] = {"kind": "ring", "edge_probability": 0.0, "directed": False}
+    fields["world"]["entities"][0]["count"] = 11
     fields["world"]["entities"][0]["initial_state"] = {"numeric": {}, "categorical": {"health": "susceptible"}}
+    fields["world"]["entities"].append({
+        "id": "seed", "label": "Initially infected agent", "count": 1,
+        "appearance": {"shape": "square", "color": "#dc2626", "size": 2.0},
+        "initial_state": {"numeric": {}, "categorical": {"health": "infected"}},
+        "initial_layout": {"kind": "line", "center": [50.0, 50.0], "spread": 0.0},
+    })
     fields["dynamics"] = {"rules": [{"id": "spread", "op": "graph_contagion", "target_type": None, "parameters": {
         "state": "health", "susceptible": "susceptible", "infected": "infected", "recovered": "recovered",
-        "transmission_probability": 0.5, "recovery_probability": 0.1,
+        "transmission_probability": 1.0, "recovery_probability": 0.0,
     }}]}
-    fields["conditions"][1]["interventions"] = [{"time": 1, "operation": "set_rule_parameter", "target": "spread", "field": "transmission_probability", "value": 0.1}]
+    fields["conditions"][1]["interventions"] = [{"time": 0, "operation": "set_rule_parameter", "target": "spread", "field": "transmission_probability", "value": 0.0}]
     fields["measurements"] = [{"id": "infected_count", "label": "Infected", "op": "count_category", "entity_type": "particle", "state": "health", "category": "infected"}]
     fields["visualization"]["chart_measurement_ids"] = ["infected_count"]
     contagion = build_experiment_spec(intent="Lower transmission in a graph contagion.", **fields)
     result = execute_visual_spec(contagion)
     assert len(result["comparisons"]) == 1
+    comparison = result["comparisons"][0]
+    assert comparison["baseline_final"] > 0.0
+    assert comparison["baseline_final"] > comparison["counterfactual_final"]
+
+
+@pytest.mark.parametrize("operation,value", [
+    ("set_rule_parameter", "not-a-number"),
+    ("set_rule_parameter", 1001.0),
+    ("scale_rule_parameter", 1001.0),
+])
+def test_rule_interventions_preserve_parameter_types_and_bounds(operation, value):
+    fields = particle_fields()
+    fields["conditions"][1]["interventions"] = [{
+        "time": 5,
+        "operation": operation,
+        "target": "force",
+        "field": "strength",
+        "value": value,
+    }]
+    with pytest.raises(ThoughtExperimentContractError):
+        build_experiment_spec(intent="Use an invalid force intervention.", **fields)
 
 
 def test_visual_coordinator_requires_confirmation_and_records_prediction_first():
     events = []
     state = {}
     fields = particle_fields()
+    replay = {}
 
     def generate(action, _payload):
         events.append(action)
         if action == "visual_spec":
             return fields
         if action == "visual_predict":
+            if replay:
+                with pytest.raises(VisualCoordinatorError, match="no longer awaiting"):
+                    replay["coordinator"].confirm(replay["confirmation"])
             return {"summary": "The intervention should change mean speed.", "expected_direction": "change", "measurement_id": "mean_speed"}
         return {"disposition": "retain", "interpretation": "The simulated comparison is consistent with the prediction."}
 
@@ -115,12 +154,149 @@ def test_visual_coordinator_requires_confirmation_and_records_prediction_first()
     )
     request = {"schema_version": "jump.thought-experiment-question/v2", "request_id": "req-v2", "session_id": "session-v2", "intent": "Reverse attraction after five steps.", "seed": 7613, "repetitions": 2}
     planned = coordinator.compile(request)
+    replay.update({
+        "coordinator": coordinator,
+        "confirmation": {**planned["confirmation"], "confirmed": True},
+    })
     assert planned["status"] == "awaiting_confirmation"
     with pytest.raises(VisualCoordinatorError):
         coordinator.confirm({**planned["confirmation"], "confirmed": False})
+    with pytest.raises(VisualCoordinatorError, match="originating request and session"):
+        coordinator.confirm({**planned["confirmation"], "session_id": "other-session", "confirmed": True})
     completed = coordinator.confirm({**planned["confirmation"], "confirmed": True})
     run = completed["run"]
     assert events == ["visual_spec", "visual_predict", "simulate", "visual_review"]
     assert run["execution"]["prediction_recorded_at"] < run["execution"]["started_at"]
     assert validate_thought_experiment_run(run, completed["spec"]) == run
     assert "image" not in str(run).lower() and "learned" not in str(run).lower()
+    with pytest.raises(VisualCoordinatorError, match="no longer awaiting"):
+        coordinator.confirm({**planned["confirmation"], "confirmed": True})
+    assert state == {}
+
+
+def test_malformed_or_unsupported_model_spec_fails_closed_and_stale_state_is_pruned():
+    now = datetime(2026, 8, 14, tzinfo=timezone.utc)
+    state = {"legacy": {"state": "awaiting_confirmation"}}
+    outputs = [
+        {**particle_fields(), "world": []},
+        {"unsupported": "operation is outside the visual DSL"},
+        particle_fields(),
+    ]
+
+    coordinator = VisualCoordinator(
+        state=state,
+        model=FrozenModel(model_id=BASE_REPO_ID, revision=BASE_REVISION),
+        transformers_revision=TRANSFORMERS_REVISION,
+        model_generate=lambda _action, _payload: outputs.pop(0),
+        simulate=lambda *_args: {},
+        code_version="c" * 40,
+        now=lambda: now,
+    )
+    request = {
+        "schema_version": "jump.thought-experiment-question/v2",
+        "request_id": "req-fail-closed",
+        "session_id": "session-fail-closed",
+        "intent": "Compile a bounded toy experiment.",
+        "seed": 7613,
+        "repetitions": 1,
+    }
+    with pytest.raises(VisualCoordinatorError, match="compiler output rejected"):
+        coordinator.compile(request)
+    with pytest.raises(VisualCoordinatorError, match="unsupported thought experiment"):
+        coordinator.compile(request)
+    planned = coordinator.compile(request)
+    assert "legacy" not in state
+    assert list(state) == [planned["confirmation"]["confirmation_token"]]
+
+
+def test_run_builder_reports_contract_error_for_missing_fields_and_parses_timezones():
+    spec = built_spec()
+    with pytest.raises(ThoughtExperimentContractError, match="missing required fields"):
+        build_thought_experiment_run(
+            spec,
+            spec_id=spec["spec_id"],
+            spec_sha256=spec["spec_sha256"],
+        )
+
+    result = execute_visual_spec(spec)
+    base = {
+        "spec_id": spec["spec_id"],
+        "spec_sha256": spec["spec_sha256"],
+        "status": "completed",
+        "execution": {
+            "engine_id": "jump.declarative-visual-engine/v2",
+            "code_version": "c" * 40,
+            "modal_call_id": "fc-timezone-test",
+            "prediction": {
+                "summary": "The intervention changes mean speed.",
+                "expected_direction": "change",
+                "measurement_id": "mean_speed",
+            },
+            "prediction_recorded_at": "2026-08-14T10:00:00+02:00",
+            "started_at": "2026-08-14T09:00:00+00:00",
+            "completed_at": "2026-08-14T09:01:00+00:00",
+            "error": None,
+        },
+        "conditions": result["conditions"],
+        "comparisons": result["comparisons"],
+        "revision": {"disposition": "retain", "interpretation": "Bounded toy result."},
+        "evidence": {
+            "spec_sha256": spec["spec_sha256"],
+            "engine_id": "jump.declarative-visual-engine/v2",
+            "code_version": "c" * 40,
+            "modal_call_id": "fc-timezone-test",
+            "result_sha256": "0" * 64,
+            "sealed_payload_sha256": "0" * 64,
+        },
+    }
+    assert build_thought_experiment_run(spec, **base)["status"] == "completed"
+    base["execution"]["prediction_recorded_at"] = "2026-08-14T08:30:00-01:00"
+    with pytest.raises(ThoughtExperimentContractError, match="prediction must be recorded"):
+        build_thought_experiment_run(spec, **base)
+
+
+def test_dead_graph_entities_do_not_interact_and_reflection_does_not_declare_velocity():
+    entities = [
+        {"alive": False, "x": -5.0, "y": -5.0, "numeric": {}, "categorical": {"health": "infected"}},
+        {"alive": True, "x": -1.0, "y": 12.0, "numeric": {}, "categorical": {"health": "susceptible"}},
+    ]
+    rule = {"parameters": {
+        "state": "health",
+        "susceptible": "susceptible",
+        "infected": "infected",
+        "recovered": "recovered",
+        "transmission_probability": 1.0,
+        "recovery_probability": 0.0,
+    }}
+    import random
+
+    _graph_contagion(rule, entities, [(0, 1)], None, random.Random(7613))
+    assert entities[1]["categorical"]["health"] == "susceptible"
+    _apply_boundary(entities, {"width": 10.0, "height": 10.0, "boundary": "reflect"})
+    assert (entities[0]["x"], entities[0]["y"]) == (-5.0, -5.0)
+    assert (entities[1]["x"], entities[1]["y"]) == (0.0, 10.0)
+    assert entities[1]["numeric"] == {}
+
+
+def test_visual_result_decompression_is_bounded_during_expansion():
+    import zlib
+
+    from jump_workbench.modal_app import _open_visual_result
+
+    assert _open_visual_result(zlib.compress(b"{}")) == {}
+    with pytest.raises(ValueError, match="canonical JSON cap"):
+        _open_visual_result(zlib.compress(b"x" * 1_000_001))
+
+
+def test_visual_model_narratives_reject_overlong_output_instead_of_truncating():
+    with pytest.raises(ValueError, match="1 through 500"):
+        _normalize_visual_prediction({
+            "summary": "x" * 501,
+            "expected_direction": "change",
+            "measurement_id": "mean_speed",
+        })
+    with pytest.raises(ValueError, match="1 through 500"):
+        _validate_visual_review({
+            "disposition": "retain",
+            "interpretation": "x" * 501,
+        })

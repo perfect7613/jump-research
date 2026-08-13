@@ -11,6 +11,7 @@ import json
 import math
 import re
 from copy import deepcopy
+from datetime import datetime, timezone
 from fractions import Fraction
 from typing import Any, Mapping
 
@@ -387,6 +388,15 @@ def build_thought_experiment_run(spec: Mapping[str, Any], **fields: Any) -> dict
     if {"schema_version", "run_id", "run_sha256"} & fields.keys():
         raise ThoughtExperimentContractError("schema_version, run_id, and run_sha256 are derived")
     run = {"schema_version": RUN_VERSION, **deepcopy(fields)}
+    required = {
+        "spec_id", "spec_sha256", "status", "execution", "conditions",
+        "comparisons", "revision", "evidence",
+    }
+    missing = required - run.keys()
+    if missing:
+        raise ThoughtExperimentContractError(
+            f"ThoughtExperimentRun is missing required fields: {sorted(missing)}"
+        )
     if run.get("spec_id") != checked["spec_id"] or run.get("spec_sha256") != checked["spec_sha256"]:
         raise ThoughtExperimentContractError("run does not bind the required ExperimentSpec")
     payload = {k: run[k] for k in ("spec_id", "spec_sha256", "status", "execution", "conditions", "comparisons", "revision")}
@@ -453,18 +463,58 @@ def _validate_spec_semantics(spec: dict[str, Any]) -> None:
     for condition in counterfactuals:
         if not condition["interventions"]:
             raise ThoughtExperimentContractError("each counterfactual requires an intervention")
-        for change in condition["interventions"]:
+        candidate_rules = deepcopy(rule_by_id)
+        ordered_changes = sorted(
+            enumerate(condition["interventions"]),
+            key=lambda item: (item[1]["time"], item[0]),
+        )
+        for _, change in ordered_changes:
             if change["time"] > duration:
                 raise ThoughtExperimentContractError("intervention time exceeds duration")
             operation, target, field, value = change["operation"], change["target"], change["field"], change["value"]
             if operation in {"set_rule_parameter", "scale_rule_parameter"}:
-                if target not in rule_ids or field not in rule_by_id[target]["parameters"] or not isinstance(value, (int, float)) or isinstance(value, bool):
+                if target not in rule_ids or field not in candidate_rules[target]["parameters"]:
                     raise ThoughtExperimentContractError("rule intervention target/value is invalid")
+                current = candidate_rules[target]["parameters"][field]
+                if operation == "scale_rule_parameter":
+                    if not _is_number(current) or not _is_number(value):
+                        raise ThoughtExperimentContractError(
+                            "rule-parameter scaling requires numeric parameter and value"
+                        )
+                    replacement = current * value
+                else:
+                    if _is_number(current):
+                        if not _is_number(value):
+                            raise ThoughtExperimentContractError(
+                                "numeric rule parameter requires a numeric intervention value"
+                            )
+                    elif isinstance(current, str):
+                        if not isinstance(value, str) or not value or len(value) > 80:
+                            raise ThoughtExperimentContractError(
+                                "text rule parameter requires bounded nonempty text"
+                            )
+                    elif type(value) is not type(current):
+                        raise ThoughtExperimentContractError(
+                            "rule intervention value type does not match its parameter"
+                        )
+                    replacement = value
+                _finite_tree(replacement, "rule intervention value")
+                candidate_rules[target]["parameters"][field] = replacement
+                _validate_rule_semantics(candidate_rules[target], entity_by_id, spec["world"])
             elif target not in entity_ids:
                 raise ThoughtExperimentContractError("state intervention target is unknown")
-            elif operation == "set_numeric_state" and (field not in entity_by_id[target]["initial_state"]["numeric"] or not isinstance(value, (int, float)) or isinstance(value, bool)):
+            elif operation == "set_numeric_state" and (
+                field not in entity_by_id[target]["initial_state"]["numeric"]
+                or not _is_number(value)
+                or not math.isfinite(value)
+            ):
                 raise ThoughtExperimentContractError("numeric-state intervention is invalid")
-            elif operation == "set_categorical_state" and (field not in entity_by_id[target]["initial_state"]["categorical"] or not isinstance(value, str)):
+            elif operation == "set_categorical_state" and (
+                field not in entity_by_id[target]["initial_state"]["categorical"]
+                or not isinstance(value, str)
+                or not value
+                or len(value) > 40
+            ):
                 raise ThoughtExperimentContractError("categorical-state intervention is invalid")
     measurement_ids = _unique((item["id"] for item in spec["measurements"]), "measurement")
     for measurement in spec["measurements"]:
@@ -495,8 +545,15 @@ def _validate_run_semantics(run: dict[str, Any], spec: dict[str, Any]) -> None:
         raise ThoughtExperimentContractError("v2 currently accepts completed visual runs only")
     if run["execution"]["prediction"]["measurement_id"] not in {item["id"] for item in spec["measurements"]}:
         raise ThoughtExperimentContractError("prediction measurement is not declared")
-    if run["execution"]["prediction_recorded_at"] >= run["execution"]["started_at"]:
+    prediction_recorded_at = _parse_timestamp(
+        run["execution"]["prediction_recorded_at"], "prediction_recorded_at"
+    )
+    started_at = _parse_timestamp(run["execution"]["started_at"], "started_at")
+    completed_at = _parse_timestamp(run["execution"]["completed_at"], "completed_at")
+    if prediction_recorded_at >= started_at:
         raise ThoughtExperimentContractError("prediction must be recorded before execution")
+    if completed_at < started_at:
+        raise ThoughtExperimentContractError("execution cannot complete before it starts")
     expected_conditions = {item["id"] for item in spec["conditions"]}
     if {item["condition_id"] for item in run["conditions"]} != expected_conditions or len(run["conditions"]) != len(expected_conditions):
         raise ThoughtExperimentContractError("visual results must cover each condition exactly once")
@@ -527,8 +584,12 @@ def _validate_run_semantics(run: dict[str, Any], spec: dict[str, Any]) -> None:
 
 def _validate_rule_semantics(rule: dict[str, Any], entities: dict[str, dict[str, Any]], world: dict[str, Any]) -> None:
     op, target, parameters = rule["op"], rule["target_type"], rule["parameters"]
-    numeric = lambda name: isinstance(parameters[name], (int, float)) and not isinstance(parameters[name], bool)
-    probability = lambda name: numeric(name) and 0 <= parameters[name] <= 1
+
+    def numeric(name: str) -> bool:
+        return _is_number(parameters[name]) and math.isfinite(parameters[name])
+
+    def probability(name: str) -> bool:
+        return numeric(name) and 0 <= parameters[name] <= 1
     if op == "move_2d":
         if target is None or not {"vx", "vy"}.issubset(entities[target]["initial_state"]["numeric"]):
             raise ThoughtExperimentContractError("move_2d requires target numeric vx and vy states")
@@ -579,6 +640,20 @@ def _unique(values: Any, label: str) -> set[str]:
     if len(items) != len(set(items)):
         raise ThoughtExperimentContractError(f"{label} IDs must be unique")
     return set(items)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _parse_timestamp(value: str, field: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise ThoughtExperimentContractError(f"execution.{field} is not a valid timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ThoughtExperimentContractError(f"execution.{field} must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 def _finite_tree(value: Any, label: str) -> None:

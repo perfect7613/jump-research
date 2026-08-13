@@ -56,8 +56,8 @@ def _execute_condition(spec: dict[str, Any], condition: dict[str, Any]) -> dict[
         duration = spec["schedule"]["duration_steps"]
         stride = spec["visualization"]["frame_stride"]
         for step in range(duration + 1):
+            _apply_interventions(entities, rules, condition["interventions"], step)
             if step:
-                _apply_interventions(entities, rules, condition["interventions"], step)
                 graph = _graph_edges(spec, entities, rng)
                 for rule in rules:
                     _apply_rule(rule, entities, graph, spec, rng)
@@ -209,8 +209,10 @@ def _pairwise_force(rule: dict[str, Any], entities: list[dict[str, Any]], _graph
             distance = math.sqrt(dx * dx + dy * dy + softening * softening)
             force = strength / (distance ** exponent)
             fx, fy = force * dx / distance, force * dy / distance
-            accelerations[left["id"]][0] += fx; accelerations[left["id"]][1] += fy
-            accelerations[right["id"]][0] -= fx; accelerations[right["id"]][1] -= fy
+            accelerations[left["id"]][0] += fx
+            accelerations[left["id"]][1] += fy
+            accelerations[right["id"]][0] -= fx
+            accelerations[right["id"]][1] -= fy
     for entity in selected:
         entity["numeric"]["vx"] = entity["numeric"].get("vx", 0.0) + accelerations[entity["id"]][0] * dt
         entity["numeric"]["vy"] = entity["numeric"].get("vy", 0.0) + accelerations[entity["id"]][1] * dt
@@ -220,17 +222,26 @@ def _graph_diffusion(rule: dict[str, Any], entities: list[dict[str, Any]], graph
     state, rate = rule["parameters"]["state"], rule["parameters"]["rate"]
     changes = [0.0] * len(entities)
     for left, right in graph:
+        if not entities[left]["alive"] or not entities[right]["alive"]:
+            continue
         delta = rate * (entities[right]["numeric"][state] - entities[left]["numeric"][state])
-        changes[left] += delta; changes[right] -= delta
+        changes[left] += delta
+        changes[right] -= delta
     for index, value in enumerate(changes):
-        entities[index]["numeric"][state] += value
+        if entities[index]["alive"]:
+            entities[index]["numeric"][state] += value
 
 
 def _graph_contagion(rule: dict[str, Any], entities: list[dict[str, Any]], graph: list[tuple[int, int]], _spec: Any, rng: random.Random) -> None:
     p = rule["parameters"]
-    infected = {index for index, item in enumerate(entities) if item["categorical"].get(p["state"]) == p["infected"]}
+    infected = {
+        index for index, item in enumerate(entities)
+        if item["alive"] and item["categorical"].get(p["state"]) == p["infected"]
+    }
     newly = set()
     for left, right in graph:
+        if not entities[left]["alive"] or not entities[right]["alive"]:
+            continue
         if left in infected and entities[right]["categorical"].get(p["state"]) == p["susceptible"] and rng.random() < p["transmission_probability"]:
             newly.add(right)
         if right in infected and entities[left]["categorical"].get(p["state"]) == p["susceptible"] and rng.random() < p["transmission_probability"]:
@@ -296,16 +307,22 @@ def _queue_agents(rule: dict[str, Any], entities: list[dict[str, Any]], _graph: 
 def _apply_boundary(entities: list[dict[str, Any]], bounds: dict[str, Any]) -> None:
     width, height, boundary = bounds["width"], bounds["height"], bounds["boundary"]
     for item in entities:
+        if not item["alive"]:
+            continue
         if boundary == "wrap":
-            item["x"] %= width; item["y"] %= height
+            item["x"] %= width
+            item["y"] %= height
         elif boundary == "clamp":
-            item["x"] = min(width, max(0.0, item["x"])); item["y"] = min(height, max(0.0, item["y"]))
+            item["x"] = min(width, max(0.0, item["x"]))
+            item["y"] = min(height, max(0.0, item["y"]))
         else:
             if item["x"] < 0 or item["x"] > width:
-                item["numeric"]["vx"] = -item["numeric"].get("vx", 0.0)
+                if "vx" in item["numeric"]:
+                    item["numeric"]["vx"] = -item["numeric"]["vx"]
                 item["x"] = min(width, max(0.0, item["x"]))
             if item["y"] < 0 or item["y"] > height:
-                item["numeric"]["vy"] = -item["numeric"].get("vy", 0.0)
+                if "vy" in item["numeric"]:
+                    item["numeric"]["vy"] = -item["numeric"]["vy"]
                 item["y"] = min(height, max(0.0, item["y"]))
 
 
