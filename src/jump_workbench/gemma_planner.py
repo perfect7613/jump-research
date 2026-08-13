@@ -114,11 +114,10 @@ def _extract_json_object(text: str) -> dict[str, Any]:
             value, end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if not text[index + end :].strip().strip("`"):
-            if not isinstance(value, dict):
-                raise ValueError("model JSON response must be an object")
-            json.dumps(value, allow_nan=False)
-            return value
+        if not isinstance(value, dict):
+            raise ValueError("model JSON response must be an object")
+        json.dumps(value, allow_nan=False)
+        return value
     raise ValueError(f"model did not return one complete parseable JSON object (chars={len(text)}, tail={text[-300:]!r})")
 
 
