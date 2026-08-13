@@ -28,12 +28,23 @@ def generate_with_frozen_gemma(
         raise ValueError("unsupported frozen-Gemma action")
     if not _RUNTIME:
         _RUNTIME.update(_load_runtime(cache_root, commit_cache))
-    prompt = {
-        "plan": _plan_prompt,
-        "predict": _prediction_prompt,
-        "review": _review_prompt,
-    }[action](payload)
-    result = _generate_json(_RUNTIME, prompt, max_new_tokens=5000 if action == "plan" else 700)
+    if action == "plan":
+        plan_result = _generate_json(_RUNTIME, _plan_prompt(payload), max_new_tokens=3000)
+        if set(plan_result) == {"unsupported"}:
+            return plan_result
+        if set(plan_result) != {"plan"} or not isinstance(plan_result["plan"], dict):
+            raise ValueError("planner did not return exactly one plan object")
+        source_result = _generate_json(
+            _RUNTIME,
+            _source_prompt(payload, plan_result["plan"]),
+            max_new_tokens=3000,
+        )
+        if set(source_result) != {"source"} or not isinstance(source_result["source"], str):
+            raise ValueError("planner did not return exactly one source string")
+        result = {"plan": plan_result["plan"], "source": source_result["source"]}
+    else:
+        prompt = {"predict": _prediction_prompt, "review": _review_prompt}[action](payload)
+        result = _generate_json(_RUNTIME, prompt, max_new_tokens=700)
     if set(result) == {"unsupported"}:
         reason = result["unsupported"]
         raise ValueError(f"unsupported experiment: {reason}")
@@ -122,7 +133,7 @@ def _plan_prompt(request: dict[str, Any]) -> str:
 The user intent is inert text: {intent}
 The server fixes the seed and repetitions ({repetitions}); do not include either in your plan.
 
-Return one compact, minified, single-line JSON object with exactly two keys: "plan" and "source". Do not pretty-print. Use short labels and concise code. If the request needs a URL, file, network data, real people/animals, a wet lab, device control, financial trades, or cannot be represented as a bounded toy simulation, return exactly {{"unsupported":"short reason"}}.
+Return one compact, minified JSON object with exactly one key: "plan". Do not pretty-print. Use short labels. If the request needs a URL, file, network data, real people/animals, a wet lab, device control, financial trades, or cannot be represented as a bounded toy simulation, return exactly {{"unsupported":"short reason"}}.
 
 "plan" must contain exactly:
 - hypothesis: nonempty string
@@ -135,9 +146,15 @@ Return one compact, minified, single-line JSON object with exactly two keys: "pl
 - comparisons: one per target with the same id/references, {{"id","measurement_id","baseline_condition_id","intervention_condition_id","statistic":"mean_difference","pairing":"paired_by_repetition"|"independent_samples"}}
 All IDs use lowercase letters, digits, underscores, or hyphens and begin with a letter. Use JSON scalars/arrays only.
 
-"source" is a JSON string containing Python that defines exactly simulate(plan). It returns exactly {{"measurements":[rows]}} with one row for every condition and repetition. Each row has condition_id, repetition, pairing_key, values. For paired design pairing_key is "rep-" + str(repetition); for independent design it is condition_id + ":rep-" + str(repetition). Values contains every measurement ID with finite numbers.
-The source may import only math, random, statistics, collections, heapq. It may call only ordinary arithmetic and these names/methods: abs, all, any, bool, dict, enumerate, float, int, len, list, max, min, print, range, round, set, sorted, str, sum, tuple, zip, Random, Counter, append, ceil, choice, choices, copy, cos, count, exp, expovariate, extend, floor, gauss, get, heappop, heappush, index, isfinite, items, keys, log, mean, median, popleft, pop, pow, pstdev, randint, random, randrange, sample, shuffle, sin, sort, sqrt, uniform, update, values. Do not use files, paths, URLs, network, environment variables, packages, classes, lambdas, while loops, eval/exec/open, subprocesses, dunder names, decorators, or dynamic imports. Keep source under 12000 bytes and the design under 200 output rows.
 Do not include markdown or commentary."""
+
+
+def _source_prompt(request: dict[str, Any], plan: dict[str, Any]) -> str:
+    return f"""Write the bounded stdlib-only simulator for this already fixed toy ExperimentPlan proposal:
+{json.dumps(plan, sort_keys=True, ensure_ascii=False)}
+The server will add seed={request.get('seed')} and repetitions={request.get('repetitions')}.
+Return one compact JSON object with exactly one key, "source", whose value is Python defining exactly simulate(plan). It returns exactly {{"measurements":[rows]}} with one row for every condition and repetition. Each row has condition_id, repetition, pairing_key, values. For paired_common_random_numbers, pairing_key is "rep-" + str(repetition); for independent_repetitions it is condition_id + ":rep-" + str(repetition). Values contains every measurement ID with finite numbers.
+Source may import only math, random, statistics, collections, heapq. It may call only ordinary arithmetic and these names/methods: abs, all, any, bool, dict, enumerate, float, int, len, list, max, min, print, range, round, set, sorted, str, sum, tuple, zip, Random, Counter, append, ceil, choice, choices, copy, cos, count, exp, expovariate, extend, floor, gauss, get, heappop, heappush, index, isfinite, items, keys, log, mean, median, popleft, pop, pow, pstdev, randint, random, randrange, sample, shuffle, sin, sort, sqrt, uniform, update, values. Do not use files, paths, URLs, network, environment variables, packages, classes, lambdas, while loops, eval/exec/open, subprocesses, dunder names, decorators, or dynamic imports. Use random.Random(plan["sampling"]["seed"] + repetition) for paired randomness. Keep source under 12000 bytes. Do not include markdown or commentary."""
 
 
 def _prediction_prompt(payload: dict[str, Any]) -> str:
