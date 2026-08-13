@@ -633,13 +633,14 @@ def authentic_stage_d_live():
     image=stage_d_image,
     timeout=300,
     max_containers=1,
+    volumes={"/hf-cache": stage_d_live_cache},
     name="authentic_stage_d_live_http_preflight",
 )
 @modal.concurrent(max_inputs=1)
 def authentic_stage_d_live_http_preflight() -> dict[str, Any]:
     from jump_runner.stage_d_live import http_boundary_preflight
 
-    return http_boundary_preflight()
+    return http_boundary_preflight(Path("/hf-cache"), stage_d_live_cache.commit)
 
 
 @app.local_entrypoint(name="submit-stage-c")

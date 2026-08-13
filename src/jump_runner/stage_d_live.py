@@ -22,33 +22,28 @@ CLAIM_LABEL = (
 )
 
 
-def _load_runtime(cache_root: Path, commit_cache: Callable[[], None]) -> dict[str, Any]:
-    import torch
+def _materialized_component_root(cache_root: Path) -> Path:
     from huggingface_hub import snapshot_download
-    from safetensors.torch import load_file
-    from transformers import AutoModelForMultimodalLM, AutoTokenizer
 
-    from jump_benchmark.authentic import build_gated_residual_projector, build_world_modules
-    from jump_benchmark.authentic_stage_d import (
-        BASE_REPO_ID,
-        BASE_REVISION,
-        assert_prompt_identity,
-        freeze_base,
-        verify_projector_compatibility,
+    root = Path(
+        snapshot_download(
+            CANONICAL_REPO_ID,
+            revision=CANONICAL_REPO_REVISION,
+            cache_dir=cache_root / "hub",
+            local_dir=cache_root / "distribution" / CANONICAL_REPO_REVISION,
+        )
     )
+    return root
+
+
+def _verified_distribution(cache_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     from jump_contracts import (
         build_world_model_load_record,
         validate_world_model_component_manifest,
         verify_world_model_component_files,
     )
 
-    root = Path(
-        snapshot_download(
-            CANONICAL_REPO_ID,
-            revision=CANONICAL_REPO_REVISION,
-            cache_dir=cache_root,
-        )
-    )
+    root = _materialized_component_root(cache_root)
     manifest = validate_world_model_component_manifest(
         json.loads((root / "components.json").read_text())
     )
@@ -62,6 +57,23 @@ def _load_runtime(cache_root: Path, commit_cache: Callable[[], None]) -> dict[st
         resolved_repository_revision=CANONICAL_REPO_REVISION,
         mode="gated_gemma",
     )
+    return root, manifest, load_record
+
+
+def _load_runtime(cache_root: Path, commit_cache: Callable[[], None]) -> dict[str, Any]:
+    import torch
+    from safetensors.torch import load_file
+    from transformers import AutoModelForMultimodalLM, AutoTokenizer
+
+    from jump_benchmark.authentic import build_gated_residual_projector, build_world_modules
+    from jump_benchmark.authentic_stage_d import (
+        BASE_REPO_ID,
+        BASE_REVISION,
+        assert_prompt_identity,
+        freeze_base,
+        verify_projector_compatibility,
+    )
+    root, manifest, load_record = _verified_distribution(cache_root)
 
     tokenizer = AutoTokenizer.from_pretrained(
         BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False
@@ -308,7 +320,7 @@ def build_live_app(*, cache_root: Path, commit_cache: Callable[[], None]):
     return app
 
 
-def http_boundary_preflight() -> dict[str, Any]:
+def http_boundary_preflight(cache_root: Path, commit_cache: Callable[[], None]) -> dict[str, Any]:
     """Exercise the actual ASGI request boundary without loading weights."""
     from fastapi.testclient import TestClient
 
@@ -328,4 +340,14 @@ def http_boundary_preflight() -> dict[str, Any]:
     )
     if response.status_code != 401:
         raise RuntimeError(f"live HTTP boundary did not reject unauthenticated input: {response.status_code}")
-    return {"status": "passed", "http_status": 401, "weights_loaded": False, "gpu_allocated": False}
+    root, manifest, load_record = _verified_distribution(cache_root)
+    commit_cache()
+    return {
+        "status": "passed",
+        "http_status": 401,
+        "weights_loaded": False,
+        "gpu_allocated": False,
+        "component_root_is_symlink": root.is_symlink(),
+        "component_manifest_sha256": manifest["manifest_sha256"],
+        "load_record_sha256": load_record["load_record_sha256"],
+    }
