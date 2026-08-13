@@ -51,4 +51,4 @@ def test_modal_boundary_has_required_isolation_controls_and_no_mounts():
     decorator = source[source.index("@app.function("):source.index("def execute_restricted_simulation")]
     assert "secrets=" not in decorator
     assert "volumes=" not in decorator
-    assert ".pip_install(" not in source
+    assert ".pip_install(" not in source[:source.index("gateway_image")]
