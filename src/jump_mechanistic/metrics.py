@@ -79,7 +79,7 @@ def contrast_effects(
     }
 
 
-def mediation_analysis(
+def observational_mediation_analysis(
     treatment: list[float],
     mediator: list[float],
     outcome: list[float],
@@ -88,8 +88,13 @@ def mediation_analysis(
     seed: int = 0,
     bootstrap_samples: int = BOOTSTRAP_RESAMPLES,
     confidence: float = BOOTSTRAP_CONFIDENCE,
-) -> dict[str, float | None]:
-    """OLS clamp/patch primitive with NIE=TE-NDE and clustered percentile CIs."""
+) -> dict[str, Any]:
+    """Exploratory observational OLS decomposition; never eligible for G6.
+
+    This function does not set a mediator by intervention.  The confirmatory
+    G6 path is :func:`jump_mechanistic.gates.evaluate_g6`, which requires
+    explicit treated/control/clamped potential-outcome records.
+    """
     _validate_bootstrap(bootstrap_samples, confidence, seed)
     if not (len(treatment) == len(mediator) == len(outcome)) or len(outcome) < 4:
         raise ValueError("mediation arrays must have equal length >= 4")
@@ -116,6 +121,7 @@ def mediation_analysis(
     # The PRD forbids publishing NIE/TE unless TE is positive and its CI excludes zero.
     proportion = indirect / total if total > 0 and total_low > 0 else None
     return {
+        "estimator_type": "observational_ols_descriptive_only",
         "path_a": path_a,
         "path_b": path_b,
         "total_effect": total,
@@ -132,6 +138,11 @@ def mediation_analysis(
         "bootstrap_seed": float(seed),
         "cluster_count": float(len(set(cluster_ids))),
     }
+
+
+def mediation_analysis(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Backward-compatible name for observational descriptive output only."""
+    return observational_mediation_analysis(*args, **kwargs)
 
 
 def mediation_specificity(
@@ -171,118 +182,53 @@ class CheckpointIdentity:
         return identity
 
 
-@dataclass(frozen=True)
 class ConfirmatoryEvidence:
-    identity: CheckpointIdentity
-    g3_passed: bool
-    g5_passed: bool
-    total_ci_low: float
-    ordered_nie_ci_lows: tuple[float, float]
-    mediated_proportion: float | None
-    specificity_passed: bool
-    ood_effect_ci_low: float
-    ood_retention: float
-    provenance_hash_match_rate: float
+    """Compatibility factory; concrete evidence lives in ``gates``."""
+
+    def __new__(cls, *_args: Any, **_kwargs: Any) -> "ConfirmatoryEvidence":
+        raise ValueError("confirmatory evidence must be computed from raw records")
+
+    @classmethod
+    def from_computed(
+        cls,
+        *,
+        identity: dict[str, Any],
+        g3_evaluation: Any,
+        g5_evaluation: Any,
+        g6_evaluation: Any,
+        ood_effect_ci_low: float,
+        ood_retention: float,
+        provenance_hash_match_rate: float,
+    ) -> Any:
+        """Assemble checkpoint evidence from verified computed gate objects."""
+        from .gates import ComputedCheckpointEvidence
+
+        return ComputedCheckpointEvidence.from_computed(
+            identity=identity,
+            g3_evaluation=g3_evaluation,
+            g5_evaluation=g5_evaluation,
+            g6_evaluation=g6_evaluation,
+            ood_effect_ci_low=ood_effect_ci_low,
+            ood_retention=ood_retention,
+            provenance_hash_match_rate=provenance_hash_match_rate,
+        )
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ConfirmatoryEvidence":
-        required = {
-            "identity", "g3_passed", "g5_passed", "total_ci_low",
-            "ordered_nie_ci_lows", "mediated_proportion", "specificity_passed",
-            "ood_effect_ci_low", "ood_retention", "provenance_hash_match_rate",
-        }
-        if not isinstance(value, dict) or set(value) != required:
-            raise ValueError(f"confirmatory evidence must contain exactly {sorted(required)}")
-        ordered = value["ordered_nie_ci_lows"]
-        if not isinstance(ordered, list) or len(ordered) != 2:
-            raise ValueError("ordered_nie_ci_lows must contain exactly inadequacy and promotion")
-        for flag in ("g3_passed", "g5_passed", "specificity_passed"):
-            if not isinstance(value[flag], bool):
-                raise ValueError(f"{flag} must be Boolean")
-        numeric = [value["total_ci_low"], *ordered, value["ood_effect_ci_low"], value["ood_retention"], value["provenance_hash_match_rate"]]
-        if value["mediated_proportion"] is not None:
-            numeric.append(value["mediated_proportion"])
-        _require_finite(numeric, "confirmatory evidence")
-        return cls(
-            identity=CheckpointIdentity.from_dict(value["identity"]),
-            g3_passed=value["g3_passed"],
-            g5_passed=value["g5_passed"],
-            total_ci_low=float(value["total_ci_low"]),
-            ordered_nie_ci_lows=(float(ordered[0]), float(ordered[1])),
-            mediated_proportion=(
-                None if value["mediated_proportion"] is None else float(value["mediated_proportion"])
-            ),
-            specificity_passed=value["specificity_passed"],
-            ood_effect_ci_low=float(value["ood_effect_ci_low"]),
-            ood_retention=float(value["ood_retention"]),
-            provenance_hash_match_rate=float(value["provenance_hash_match_rate"]),
+        raise ValueError(
+            "trusted confirmatory booleans/numeric summaries are forbidden; "
+            "use from_computed() with raw-record gate evaluators"
         )
 
 
 def evaluate_confirmatory_gates(
-    primary: ConfirmatoryEvidence | None,
-    replication: ConfirmatoryEvidence | None,
+    primary: Any,
+    replication: Any,
 ) -> dict[str, dict[str, Any]]:
-    """Evaluate locked G6-G8; missing, incomplete, or aliased evidence fails closed."""
-    if primary is None:
-        reason = "primary checkpoint evidence is missing"
-        return {gate: {"passed": False, "reasons": [reason]} for gate in ("g6", "g7", "g8")}
-    g6_reasons = _g6_reasons(primary)
-    g7_reasons = _g7_reasons(primary)
-    g8_reasons: list[str] = []
-    if replication is None:
-        g8_reasons.append("second checkpoint evidence is missing")
-    else:
-        if not _meaningfully_distinct(primary.identity, replication.identity):
-            g8_reasons.append("second checkpoint is not an immutable, independent revision")
-        if not replication.g3_passed:
-            g8_reasons.append("second checkpoint did not pass G3")
-        if not replication.g5_passed:
-            g8_reasons.append("second checkpoint did not pass G5")
-        g8_reasons.extend(f"second checkpoint: {reason}" for reason in _g6_reasons(replication))
-        g8_reasons.extend(f"second checkpoint: {reason}" for reason in _g7_reasons(replication))
-    if g6_reasons:
-        g8_reasons.append("primary checkpoint did not pass G6")
-    if g7_reasons:
-        g8_reasons.append("primary checkpoint did not pass G7")
-    return {
-        "g6": {"passed": not g6_reasons, "reasons": g6_reasons},
-        "g7": {"passed": not g7_reasons, "reasons": g7_reasons},
-        "g8": {"passed": not g8_reasons, "reasons": g8_reasons},
-    }
+    """Compatibility wrapper around the raw-record-only gate module."""
+    from .gates import evaluate_checkpoint_gates
 
-
-def _g6_reasons(evidence: ConfirmatoryEvidence) -> list[str]:
-    reasons = []
-    if evidence.total_ci_low <= 0:
-        reasons.append("TE lower CI is not positive")
-    if any(value <= 0 for value in evidence.ordered_nie_ci_lows):
-        reasons.append("both ordered NIE lower CIs must be positive")
-    if evidence.mediated_proportion is None or evidence.mediated_proportion < 0.20:
-        reasons.append("mediated proportion is missing or below 20%")
-    if not evidence.specificity_passed:
-        reasons.append("specificity controls are not null or smaller")
-    return reasons
-
-
-def _g7_reasons(evidence: ConfirmatoryEvidence) -> list[str]:
-    reasons = []
-    if evidence.ood_effect_ci_low <= 0:
-        reasons.append("OOD causal-effect lower CI is not positive")
-    if evidence.ood_retention < 0.50:
-        reasons.append("OOD retention is below 50%")
-    if evidence.provenance_hash_match_rate != 1.0:
-        reasons.append("OOD provenance is not 100%")
-    return reasons
-
-
-def _meaningfully_distinct(first: CheckpointIdentity, second: CheckpointIdentity) -> bool:
-    return (
-        first.checkpoint_id != second.checkpoint_id
-        and first.model_revision != second.model_revision
-        and first.training_lineage_id != second.training_lineage_id
-        and first.checkpoint_sha256 != second.checkpoint_sha256
-    )
+    return evaluate_checkpoint_gates(primary, replication)
 
 
 def _mediation_estimate(
