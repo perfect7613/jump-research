@@ -24,9 +24,49 @@ _ID = {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
 _SCALAR = {"type": ["string", "number", "integer", "boolean", "null"]}
 _SCALAR_OR_ARRAY = {"oneOf": [_SCALAR, {"type": "array", "items": _SCALAR, "maxItems": 100}]}
 
+RESTRICTED_POLICY = {
+    "schema_version": "jump.restricted-python-policy/v1",
+    "entrypoint": "simulate",
+    "source_bytes": 16_384,
+    "ast_nodes": 1_200,
+    "allowed_imports": ["collections", "heapq", "math", "random", "statistics"],
+    "allowed_builtins": [
+        "abs", "all", "any", "bool", "dict", "enumerate", "float", "int", "len", "list",
+        "max", "min", "print", "range", "round", "set", "sorted", "str", "sum", "tuple", "zip",
+    ],
+    "allowed_attributes": [
+        "Counter", "Random", "append", "ceil", "choice", "choices", "copy", "cos", "count",
+        "exp", "expovariate", "extend", "floor", "gauss", "get", "heappop", "heappush", "index",
+        "isfinite", "items", "keys", "log", "mean", "median", "popleft", "pop", "pow", "pstdev",
+        "randint", "random", "randrange", "sample", "shuffle", "sin", "sort", "sqrt", "uniform",
+        "update", "values",
+    ],
+    "banned_names": [
+        "breakpoint", "compile", "delattr", "eval", "exec", "getattr", "globals", "help", "input",
+        "locals", "memoryview", "open", "setattr", "type", "vars", "__import__",
+    ],
+    "banned_modules": [
+        "asyncio", "builtins", "ctypes", "ftplib", "http", "importlib", "inspect", "marshal",
+        "multiprocessing", "os", "pathlib", "pickle", "pip", "requests", "shelve", "shutil", "socket",
+        "subprocess", "sys", "tempfile", "threading", "urllib",
+    ],
+    "filesystem": False,
+    "network": False,
+    "subprocesses": False,
+    "dynamic_code": False,
+}
+RESTRICTED_POLICY_SHA256 = hashlib.sha256(
+    json.dumps(RESTRICTED_POLICY, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+).hexdigest()
+DEPENDENCY_LOCK = {"python": "3.11", "distributions": []}
+DEPENDENCY_LOCK_SHA256 = hashlib.sha256(
+    json.dumps(DEPENDENCY_LOCK, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+).hexdigest()
+
 FIXED_SANDBOX = {
     "adapter_id": RESTRICTED_ADAPTER_ID,
-    "python": {"version": "3.11", "dependency_lock_sha256": hashlib.sha256(b"").hexdigest()},
+    "policy_sha256": RESTRICTED_POLICY_SHA256,
+    "python": {"version": "3.11", "dependency_lock_sha256": DEPENDENCY_LOCK_SHA256},
     "limits": {
         "cpu_cores": 1.0,
         "memory_mb": 512,
@@ -341,24 +381,56 @@ def validate_experiment_plan(value: Mapping[str, Any]) -> dict[str, Any]:
     if plan["plan_sha256"] != digest or plan["plan_id"] != f"plan-{digest[:24]}":
         raise ExperimentContractError("ExperimentPlan content hash or derived plan_id does not match")
     _validate_plan_references(plan)
-    if {key: plan["sandbox"][key] for key in ("adapter_id", "python", "limits", "capabilities")} != FIXED_SANDBOX:
+    if {key: plan["sandbox"][key] for key in FIXED_SANDBOX} != FIXED_SANDBOX:
         raise ExperimentContractError("sandbox policy is server-owned and must match the fixed policy")
     return plan
 
 
-def build_experiment_run(**fields: Any) -> dict[str, Any]:
+def build_experiment_run(
+    plan: Mapping[str, Any],
+    *,
+    verified_run_result: Mapping[str, Any] | bytes,
+    verified_artifact_inventory: list[Any] | bytes,
+    verified_sealed_payload: Mapping[str, Any] | bytes,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Build a run from an exact plan and independently supplied evidence bytes."""
+    checked_plan = validate_experiment_plan(plan)
     if {"schema_version", "run_id", "run_sha256"} & fields.keys():
         raise ExperimentContractError("schema_version, run_id, and run_sha256 are derived")
     run = {"schema_version": EXPERIMENT_RUN_VERSION, **deepcopy(fields)}
+    if run.get("plan_id") != checked_plan["plan_id"] or run.get("plan_sha256") != checked_plan["plan_sha256"]:
+        raise ExperimentContractError("run fields must bind the required ExperimentPlan")
+    if not isinstance(run.get("evidence"), dict):
+        raise ExperimentContractError("run requires an evidence record")
+    evidence_hashes = _verified_evidence_hashes(
+        verified_run_result, verified_artifact_inventory, verified_sealed_payload,
+        expected_plan_sha256=checked_plan["plan_sha256"],
+    )
+    run["evidence"].update(evidence_hashes)
     digest = _content_hash(run, id_key="run_id", hash_key="run_sha256")
     run["run_id"] = f"run-{digest[:24]}"
     run["run_sha256"] = digest
-    validate_experiment_run(run)
+    validate_experiment_run(
+        run,
+        checked_plan,
+        verified_run_result=verified_run_result,
+        verified_artifact_inventory=verified_artifact_inventory,
+        verified_sealed_payload=verified_sealed_payload,
+    )
     return run
 
 
-def validate_experiment_run(value: Mapping[str, Any], plan: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def validate_experiment_run(
+    value: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    *,
+    verified_run_result: Mapping[str, Any] | bytes,
+    verified_artifact_inventory: list[Any] | bytes,
+    verified_sealed_payload: Mapping[str, Any] | bytes,
+) -> dict[str, Any]:
     run = deepcopy(dict(value))
+    checked_plan = validate_experiment_plan(plan)
     _validate_schema(EXPERIMENT_RUN_SCHEMA, run, "ExperimentRun")
     digest = _content_hash(run, id_key="run_id", hash_key="run_sha256")
     if run["run_sha256"] != digest or run["run_id"] != f"run-{digest[:24]}":
@@ -370,10 +442,87 @@ def validate_experiment_run(value: Mapping[str, Any], plan: Mapping[str, Any] | 
     if run["execution"]["prediction_sha256"] != hashlib.sha256(canonical_json(run["execution"]["prediction"])).hexdigest():
         raise ExperimentContractError("prediction_sha256 does not bind the prediction")
     _validate_prediction_order(run["execution"])
-    if plan is not None:
-        checked_plan = validate_experiment_plan(plan)
-        _validate_run_against_plan(run, checked_plan)
+    if {
+        key: run["evidence"][key]
+        for key in ("run_result_sha256", "artifact_inventory_sha256", "sealed_payload_sha256")
+    } != _verified_evidence_hashes(
+        verified_run_result, verified_artifact_inventory, verified_sealed_payload,
+        expected_plan_sha256=checked_plan["plan_sha256"],
+    ):
+        raise ExperimentContractError("evidence hashes do not match the verified evidence objects")
+    _validate_evidence_payloads(
+        run, verified_run_result, verified_artifact_inventory, verified_sealed_payload
+    )
+    _validate_run_against_plan(run, checked_plan)
     return run
+
+
+def _verified_evidence_hashes(
+    run_result: Mapping[str, Any] | bytes,
+    artifact_inventory: list[Any] | bytes,
+    sealed_payload: Mapping[str, Any] | bytes,
+    *,
+    expected_plan_sha256: str,
+) -> dict[str, str]:
+    run_result, run_result_bytes = _verified_json(run_result, Mapping, "run result")
+    artifact_inventory, artifact_bytes = _verified_json(artifact_inventory, list, "artifact inventory")
+    sealed_payload, sealed_bytes = _verified_json(sealed_payload, Mapping, "sealed payload")
+    if run_result.get("schema_version") != "jump.run-result/v1":
+        raise ExperimentContractError("verified run result must be jump.run-result/v1")
+    if run_result.get("plan_sha256") != expected_plan_sha256:
+        raise ExperimentContractError("verified run result does not bind the required plan")
+    if sealed_payload.get("plan_sha256") != expected_plan_sha256:
+        raise ExperimentContractError("verified sealed payload does not bind the required plan")
+    for record in artifact_inventory:
+        if not isinstance(record, Mapping) or record.get("plan_sha256") != expected_plan_sha256:
+            raise ExperimentContractError("each artifact inventory record must bind the required plan")
+    return {
+        "run_result_sha256": hashlib.sha256(run_result_bytes).hexdigest(),
+        "artifact_inventory_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "sealed_payload_sha256": hashlib.sha256(sealed_bytes).hexdigest(),
+    }
+
+
+def _verified_json(value: Any, expected_type: type, label: str) -> tuple[Any, bytes]:
+    if isinstance(value, bytes):
+        try:
+            decoded = json.loads(value)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ExperimentContractError(f"verified {label} bytes must be canonical JSON") from exc
+        encoded = canonical_json(decoded)
+        if value != encoded:
+            raise ExperimentContractError(f"verified {label} bytes are not in canonical form")
+        value = decoded
+    if not isinstance(value, expected_type):
+        raise ExperimentContractError(f"verified {label} has the wrong JSON type")
+    return value, canonical_json(value)
+
+
+def _validate_evidence_payloads(
+    run: Mapping[str, Any],
+    run_result_value: Mapping[str, Any] | bytes,
+    artifact_inventory_value: list[Any] | bytes,
+    sealed_payload_value: Mapping[str, Any] | bytes,
+) -> None:
+    run_result, _ = _verified_json(run_result_value, Mapping, "run result")
+    artifact_inventory, _ = _verified_json(artifact_inventory_value, list, "artifact inventory")
+    sealed_payload, _ = _verified_json(sealed_payload_value, Mapping, "sealed payload")
+    if run_result.get("status") != run["status"]:
+        raise ExperimentContractError("verified run result status does not match the ExperimentRun")
+    for key in ("measurements", "comparisons"):
+        if run_result.get(key) != run[key]:
+            raise ExperimentContractError(f"verified run result {key} do not match the ExperimentRun")
+    expected_sealed = {
+        "plan_sha256": run["plan_sha256"],
+        "prediction": run["execution"]["prediction"],
+        "measurements": run["measurements"],
+        "comparisons": run["comparisons"],
+        "revision": run["revision"],
+    }
+    if sealed_payload != expected_sealed:
+        raise ExperimentContractError("verified sealed payload does not match the ExperimentRun")
+    if artifact_inventory and run["status"] != "completed":
+        raise ExperimentContractError("failed runs cannot publish artifacts")
 
 
 def _validate_schema(schema: Mapping[str, Any], value: Any, label: str) -> None:
@@ -458,28 +607,116 @@ def _validate_run_against_plan(run: dict[str, Any], plan: dict[str, Any]) -> Non
         raise ExperimentContractError("prediction claims must cover each frozen prediction target")
     measurement_ids = {item["id"] for item in plan["measurements"]}
     condition_ids = {item["id"] for item in plan["conditions"]}
+    expected_rows = {
+        (condition_id, repetition)
+        for condition_id in condition_ids
+        for repetition in range(plan["sampling"]["repetitions"])
+    }
+    seen_rows: dict[tuple[str, int], dict[str, Any]] = {}
     for record in run["measurements"]:
         if record["condition_id"] not in condition_ids or set(record["values"]) != measurement_ids:
             raise ExperimentContractError("measurement record does not cover the frozen plan")
         if record["repetition"] >= plan["sampling"]["repetitions"]:
             raise ExperimentContractError("measurement repetition exceeds the frozen sampling plan")
+        row_key = (record["condition_id"], record["repetition"])
+        if row_key in seen_rows:
+            raise ExperimentContractError("measurement condition/repetition rows must be unique")
+        expected_pairing_key = (
+            f"rep-{record['repetition']}"
+            if plan["sampling"]["design"] == "paired_common_random_numbers"
+            else f"{record['condition_id']}:rep-{record['repetition']}"
+        )
+        if record["pairing_key"] != expected_pairing_key:
+            raise ExperimentContractError("measurement pairing_key must be server-derived from the sampling plan")
+        seen_rows[row_key] = record
+    if run["status"] == "completed" and set(seen_rows) != expected_rows:
+        raise ExperimentContractError("completed runs require every condition/repetition measurement exactly once")
+    if run["status"] == "failed" and run["comparisons"]:
+        raise ExperimentContractError("failed runs cannot contain comparisons")
     planned_comparisons = {item["id"]: item for item in plan["comparisons"]}
-    if {item["id"] for item in run["comparisons"]} != set(planned_comparisons):
+    if run["status"] == "completed" and {item["id"] for item in run["comparisons"]} != set(planned_comparisons):
         raise ExperimentContractError("run comparisons must cover the frozen comparison specs")
     for record in run["comparisons"]:
         spec = planned_comparisons[record["id"]]
         for key in ("measurement_id", "baseline_condition_id", "intervention_condition_id"):
             if record[key] != spec[key]:
                 raise ExperimentContractError("run comparison does not match its frozen spec")
-        pair_hash = hashlib.sha256(canonical_json(record["pairing_keys"])).hexdigest()
+        expected_pairing_keys, pair_set, estimate = _comparison_evidence(spec, plan, seen_rows)
+        if record["pairing_keys"] != expected_pairing_keys:
+            raise ExperimentContractError("comparison pairing_keys do not bind the measured rows")
+        pair_hash = hashlib.sha256(canonical_json(pair_set)).hexdigest()
         if record["pair_set_sha256"] != pair_hash:
-            raise ExperimentContractError("pair_set_sha256 does not bind pairing_keys")
+            raise ExperimentContractError("pair_set_sha256 does not bind the paired row hashes and values")
+        if record["estimate"] != estimate:
+            raise ExperimentContractError("comparison estimate must be recomputed from measured rows")
+
+
+def comparison_records(plan: Mapping[str, Any], measurements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compute all frozen mean differences and row-bound pair-set hashes."""
+    checked = validate_experiment_plan(plan)
+    rows = {(row["condition_id"], row["repetition"]): row for row in measurements}
+    records: list[dict[str, Any]] = []
+    for spec in checked["comparisons"]:
+        pairing_keys, pair_set, estimate = _comparison_evidence(spec, checked, rows)
+        records.append(
+            {
+                "id": spec["id"],
+                "plan_sha256": checked["plan_sha256"],
+                "measurement_id": spec["measurement_id"],
+                "baseline_condition_id": spec["baseline_condition_id"],
+                "intervention_condition_id": spec["intervention_condition_id"],
+                "pairing_keys": pairing_keys,
+                "pair_set_sha256": hashlib.sha256(canonical_json(pair_set)).hexdigest(),
+                "estimate": estimate,
+            }
+        )
+    return records
+
+
+def _comparison_evidence(
+    spec: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    rows: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> tuple[list[str], Any, float]:
+    baseline_rows: list[Mapping[str, Any]] = []
+    intervention_rows: list[Mapping[str, Any]] = []
+    for repetition in range(plan["sampling"]["repetitions"]):
+        try:
+            baseline_rows.append(rows[(spec["baseline_condition_id"], repetition)])
+            intervention_rows.append(rows[(spec["intervention_condition_id"], repetition)])
+        except KeyError as exc:
+            raise ExperimentContractError("comparison is missing a required measured row") from exc
+    measurement_id = spec["measurement_id"]
+    estimate = float(
+        sum(row["values"][measurement_id] for row in intervention_rows) / len(intervention_rows)
+        - sum(row["values"][measurement_id] for row in baseline_rows) / len(baseline_rows)
+    )
+    if plan["sampling"]["design"] == "paired_common_random_numbers":
+        pair_set = []
+        pairing_keys = []
+        for repetition, (baseline, intervention) in enumerate(zip(baseline_rows, intervention_rows)):
+            pair = {
+                "repetition": repetition,
+                "pairing_key": f"rep-{repetition}",
+                "baseline_row_sha256": hashlib.sha256(canonical_json(baseline)).hexdigest(),
+                "intervention_row_sha256": hashlib.sha256(canonical_json(intervention)).hexdigest(),
+            }
+            pair_set.append(pair)
+            pairing_keys.append(hashlib.sha256(canonical_json(pair)).hexdigest())
+    else:
+        pair_set = {
+            "baseline_row_sha256s": [hashlib.sha256(canonical_json(row)).hexdigest() for row in baseline_rows],
+            "intervention_row_sha256s": [hashlib.sha256(canonical_json(row)).hexdigest() for row in intervention_rows],
+        }
+        pairing_keys = pair_set["baseline_row_sha256s"] + pair_set["intervention_row_sha256s"]
+    return pairing_keys, pair_set, estimate
 
 
 __all__ = [
     "EXPERIMENT_PLAN_VERSION", "EXPERIMENT_RUN_VERSION", "RESTRICTED_ADAPTER_ID",
+    "RESTRICTED_POLICY", "RESTRICTED_POLICY_SHA256", "DEPENDENCY_LOCK", "DEPENDENCY_LOCK_SHA256",
     "EXPERIMENT_PLAN_SCHEMA", "EXPERIMENT_RUN_SCHEMA", "EXPERIMENT_PLAN_SCHEMA_SHA256",
     "EXPERIMENT_RUN_SCHEMA_SHA256", "FIXED_SANDBOX", "ExperimentContractError",
     "canonical_json", "schema_sha256", "build_experiment_plan", "validate_experiment_plan",
-    "build_experiment_run", "validate_experiment_run",
+    "build_experiment_run", "validate_experiment_run", "comparison_records",
 ]
