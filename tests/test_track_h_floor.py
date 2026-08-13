@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from jump_benchmark.baselines import CONDITIONS, build_request
+from jump_benchmark.baselines import CONDITIONS, build_request, load_backend, register_backend_adapter
 from jump_benchmark.canonical import canonical_json
 from jump_benchmark.scoring import score_answer
 from jump_benchmark.simulator import DatasetSpec, EpisodeSpec, Law, generate_dataset, generate_episode
@@ -40,3 +40,25 @@ def test_all_four_baseline_interfaces_are_distinct_and_bounded():
     assert all(request.lexical_token_count <= request.lexical_token_budget for request in requests.values())
     assert "all 31 canonical partitions" in requests["C-prime"].prompt
 
+
+def test_backend_loading_uses_only_server_registered_adapters():
+    with pytest.raises(ValueError, match="unsupported"):
+        load_backend({"type": "python", "module": "os", "factory": "system", "config": {}})
+    with pytest.raises(ValueError, match="allowlisted"):
+        load_backend({"type": "registered", "adapter_id": "unknown", "config": {}})
+
+    class Backend:
+        identity = {
+            "backend_id": "test-live",
+            "backend_kind": "live_model",
+            "model_id": "org/model",
+            "model_revision": "0" * 40,
+            "tokenizer_revision": "1" * 40,
+            "license": "test-only",
+        }
+
+        def generate(self, request):
+            return {"request_sha256": request.sha256}
+
+    register_backend_adapter("test-live", lambda config: Backend())
+    assert load_backend({"type": "registered", "adapter_id": "test-live", "config": {}}).identity["backend_id"] == "test-live"

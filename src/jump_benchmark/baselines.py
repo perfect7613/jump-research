@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .canonical import sha256_json
 from .simulator import Law, pairwise_forces
 
 CONDITIONS = ("A", "B", "C", "C-prime")
 BASELINE_SCHEMA_VERSION = "jump.track-h-baselines/v1"
+_ADAPTER_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_BACKEND_ADAPTERS: dict[str, Callable[[dict[str, Any]], "BaselineBackend"]] = {}
 
 ANSWER_INSTRUCTION = """Return JSON only with exactly these fields:
 partition: six binary integers (both labels allowed);
@@ -130,6 +132,35 @@ class ReplayBackend:
         return item["response"]
 
 
+def register_backend_adapter(
+    adapter_id: str, factory: Callable[[dict[str, Any]], BaselineBackend]
+) -> None:
+    """Register one server-owned model adapter; request data cannot import code."""
+    if not isinstance(adapter_id, str) or _ADAPTER_ID.fullmatch(adapter_id) is None:
+        raise ValueError("adapter_id must be a lowercase server identifier")
+    if not callable(factory):
+        raise ValueError("backend adapter factory must be callable")
+    if adapter_id in _BACKEND_ADAPTERS:
+        raise ValueError(f"backend adapter already registered: {adapter_id}")
+    _BACKEND_ADAPTERS[adapter_id] = factory
+
+
+def _validate_live_backend(backend: Any) -> BaselineBackend:
+    identity = getattr(backend, "identity", None)
+    if not isinstance(identity, dict) or identity.get("backend_kind") != "live_model":
+        raise ValueError("registered backend must expose a live_model identity")
+    for field in ("backend_id", "model_id", "model_revision", "tokenizer_revision", "license"):
+        if not isinstance(identity.get(field), str) or not identity[field].strip():
+            raise ValueError(f"registered backend identity is missing {field}")
+    if identity["model_revision"].lower() in {"main", "master", "latest", "head"}:
+        raise ValueError("registered backend model_revision must be immutable")
+    if identity["tokenizer_revision"].lower() in {"main", "master", "latest", "head"}:
+        raise ValueError("registered backend tokenizer_revision must be immutable")
+    if not callable(getattr(backend, "generate", None)):
+        raise ValueError("registered backend must define generate(request)")
+    return backend
+
+
 def load_backend(spec: dict[str, Any]) -> BaselineBackend:
     if not isinstance(spec, dict) or not isinstance(spec.get("type"), str):
         raise ValueError("backend spec requires a type")
@@ -142,26 +173,14 @@ def load_backend(spec: dict[str, Any]) -> BaselineBackend:
         if set(spec) != {"type", "path"}:
             raise ValueError("replay backend requires exactly type and path")
         return ReplayBackend(spec["path"])
-    if backend_type == "python":
-        required = {"type", "module", "factory", "config"}
+    if backend_type == "registered":
+        required = {"type", "adapter_id", "config"}
         if set(spec) != required or not isinstance(spec["config"], dict):
-            raise ValueError(f"python backend requires exactly {sorted(required)}")
-        module = importlib.import_module(spec["module"])
-        factory = getattr(module, spec["factory"])
-        backend = factory(dict(spec["config"]))
-        identity = getattr(backend, "identity", None)
-        if not isinstance(identity, dict) or identity.get("backend_kind") != "live_model":
-            raise ValueError("python backend must expose a live_model identity")
-        for field in ("backend_id", "model_id", "model_revision", "tokenizer_revision", "license"):
-            if not isinstance(identity.get(field), str) or not identity[field].strip():
-                raise ValueError(f"python backend identity is missing {field}")
-        if identity["model_revision"].lower() in {"main", "master", "latest", "head"}:
-            raise ValueError("python backend model_revision must be immutable")
-        if identity["tokenizer_revision"].lower() in {"main", "master", "latest", "head"}:
-            raise ValueError("python backend tokenizer_revision must be immutable")
-        if not callable(getattr(backend, "generate", None)):
-            raise ValueError("python backend must define generate(request)")
-        return backend
+            raise ValueError(f"registered backend requires exactly {sorted(required)}")
+        adapter_id = spec["adapter_id"]
+        if not isinstance(adapter_id, str) or adapter_id not in _BACKEND_ADAPTERS:
+            raise ValueError("registered backend adapter_id is not server-allowlisted")
+        return _validate_live_backend(_BACKEND_ADAPTERS[adapter_id](dict(spec["config"])))
     raise ValueError(f"unsupported backend type {backend_type!r}")
 
 

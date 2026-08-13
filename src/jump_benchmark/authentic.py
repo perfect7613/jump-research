@@ -522,7 +522,12 @@ def render_predicted_state_svg(predicted_positions: list[list[float]], world_lat
     return "\n".join(elements) + "\n"
 
 
-def stage_a_smoke(output_dir: Path) -> dict[str, Any]:
+def stage_a_smoke(output_dir: Path, *, experiment_spec: dict[str, Any]) -> dict[str, Any]:
+    from .experiment_spec import validate_experiment_spec
+    from .task_adapter import write_track_h_task_evidence
+
+    plan = validate_experiment_spec(experiment_spec)
+    experiment_spec_sha256 = sha256_json(plan)
     dataset = authentic_dataset(root_seed=88173, split_counts={"train": 8, "validation": 2, "test": 2})
     encoder, decoder, metrics = train_world_modules(dataset, steps=400, learning_rate=3e-3)
     rows, inputs, _, _, _ = dataset_tensors(dataset, "train")
@@ -592,6 +597,8 @@ def stage_a_smoke(output_dir: Path) -> dict[str, Any]:
             "encoder_identity": encoder_identity,
             "source_observation": observation_binding,
             "architecture_manifest_sha256": AUTHENTIC_ARCHITECTURE_MANIFEST_SHA256,
+            "experiment_id": plan["experiment_id"],
+            "experiment_spec_sha256": experiment_spec_sha256,
         },
     }
     evidence = build_learned_latent_evidence(
@@ -643,8 +650,18 @@ def stage_a_smoke(output_dir: Path) -> dict[str, Any]:
         "image_source": "learned decoder predicted positions followed by deterministic SVG renderer",
         "mechanistic_evidence": False,
     }
-    (output_dir / "result.json").write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
-    return result
+    evidence_result = write_track_h_task_evidence(
+        output_dir,
+        metrics=[
+            {"name": "initial_total_loss", "value": metrics["initial_total_loss"]},
+            {"name": "final_total_loss", "value": metrics["final_total_loss"]},
+            {"name": "final_position_mse", "value": metrics["final_position_mse"]},
+        ],
+        terminal=result,
+        experiment_spec=plan,
+        track_h={"stage": "A", "mechanistic_evidence": False},
+    )
+    return {**result, "experiment_id": plan["experiment_id"], "experiment_spec_sha256": experiment_spec_sha256, "task_evidence": evidence_result}
 
 
 def _binary_auc(scores: list[float], labels: list[int]) -> float:
@@ -694,7 +711,14 @@ def evaluate_world_modules(encoder: Any, decoder: Any, dataset: dict[str, Any], 
     }
 
 
-def run_world_stage(*, stage: str, output_root: Path, checkpoint_root: Path, device: str = "cuda") -> dict[str, Any]:
+def run_world_stage(
+    *,
+    stage: str,
+    output_root: Path,
+    checkpoint_root: Path,
+    experiment_spec: dict[str, Any],
+    device: str = "cuda",
+) -> dict[str, Any]:
     """Train/evaluate the Stage B predictive pilot under its frozen contract.
 
     Stage C has a separate, stricter implementation and manifest in
@@ -705,6 +729,11 @@ def run_world_stage(*, stage: str, output_root: Path, checkpoint_root: Path, dev
     import time
     import torch
     from safetensors.torch import save_file
+    from .experiment_spec import validate_experiment_spec
+    from .task_adapter import write_track_h_task_evidence
+
+    plan = validate_experiment_spec(experiment_spec)
+    experiment_spec_sha256 = sha256_json(plan)
 
     settings = {
         "B": {"counts": {"train": 128, "validation": 32, "test": 32}, "steps": 200, "learning_rate": 1e-3},
@@ -784,6 +813,8 @@ def run_world_stage(*, stage: str, output_root: Path, checkpoint_root: Path, dev
                 **test_rows[0]["observation_binding"], **observation.descriptor(),
             },
             "architecture_manifest_sha256": AUTHENTIC_ARCHITECTURE_MANIFEST_SHA256,
+            "experiment_id": plan["experiment_id"],
+            "experiment_spec_sha256": experiment_spec_sha256,
         },
     }
     evidence = build_learned_latent_evidence(
@@ -823,10 +854,19 @@ def run_world_stage(*, stage: str, output_root: Path, checkpoint_root: Path, dev
         "learned_latent_evidence_sha256": hashlib.sha256((output_root / "learned-latent-evidence.json").read_bytes()).hexdigest(),
     }
     (output_root / "world-config.json").write_text(json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n")
-    (output_root / "result.json").write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
-    hashes = {str(path.relative_to(output_root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(output_root.rglob("*")) if path.is_file()}
-    (output_root / "SHA256SUMS.json").write_text(json.dumps(hashes, sort_keys=True, separators=(",", ":")) + "\n")
-    return {**result, "artifact_hashes": hashes, "artifact_root": str(output_root)}
+    evidence_result = write_track_h_task_evidence(
+        output_root,
+        metrics=[
+            {"name": "initial_train_loss", "value": first_loss},
+            {"name": "final_train_loss", "value": float(loss.detach().cpu())},
+            {"name": "validation_future_position_nrmse", "value": validation["future_position_nrmse"]},
+            {"name": "heldout_future_position_nrmse", "value": test["future_position_nrmse"]},
+        ],
+        terminal=result,
+        experiment_spec=plan,
+        track_h={"stage": stage, "mechanistic_evidence": False},
+    )
+    return {**result, "experiment_id": plan["experiment_id"], "experiment_spec_sha256": experiment_spec_sha256, "task_evidence": evidence_result, "artifact_root": str(output_root)}
 
 
 def bind_source_observation(*, source_record: dict[str, Any], observation_bytes: bytes, source_world_id: str) -> dict[str, str]:

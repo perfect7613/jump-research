@@ -11,7 +11,14 @@ dependencies = ["jsonschema>=4.23,<5", "PyYAML>=6.0,<7"]
 
 [project.optional-dependencies]
 modal = ["modal>=1.1,<2"]
-test = ["modal>=1.1,<2", "pytest>=8,<9"]
+track-h = ["numpy>=1.26,<3", "safetensors>=0.4,<1", "torch>=2.2,<3"]
+test = [
+  "modal>=1.1,<2",
+  "numpy>=1.26,<3",
+  "pytest>=8,<9",
+  "safetensors>=0.4,<1",
+  "torch>=2.2,<3",
+]
 
 [project.scripts]
 jump-experiments = "jump_runner.cli:main"
