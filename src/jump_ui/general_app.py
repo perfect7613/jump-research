@@ -11,7 +11,10 @@ from jump_workbench.workflow import QUESTION_VERSION, validate_user_intent
 from .app import CSS
 from .general_client import GeneralCoordinatorClient, GeneralCoordinatorError
 from .general_flow import plan_rows, result_rows
-from .general_presentation import EXAMPLES, QUESTION, SCOPE, hero_html, particle_research_card, plan_shell, result_shell
+from .general_presentation import (
+    EXAMPLES, QUESTION, SCOPE, completed_summary, hero_html, no_learned_world_image,
+    particle_research_card, plan_shell, plan_summary, ready_summary, result_shell,
+)
 
 GENERAL_CSS = CSS + """
 .research-card { background: var(--sheet); border: 1px solid var(--line); padding: 22px 24px; margin: 34px 0 10px; }
@@ -22,6 +25,10 @@ GENERAL_CSS = CSS + """
 .general-plan-grid div { background: var(--sheet); padding: 18px; }
 .general-plan-grid dt { color: var(--muted) !important; font: 10px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .08em; }
 .general-plan-grid dd { color: var(--ink) !important; margin: 8px 0 0; font-size: 17px; }
+.result-summary { background: var(--sheet); border: 2px solid var(--blue); padding: 22px 24px; margin: 18px 0; }
+.result-summary h2 { color: var(--ink) !important; font-size: 25px; margin: 8px 0 12px; }
+.result-summary p, .image-status p { color: var(--ink) !important; }
+.image-status { background: var(--sheet); border: 1px solid var(--line); padding: 18px 22px; margin: 12px 0 22px; }
 @media (max-width: 720px) { .general-plan-grid { grid-template-columns: 1fr; } }
 """
 
@@ -39,6 +46,7 @@ def create_general_app():
                 visible=True,
             ),
             gr.update(value="Building experiment plan…", interactive=False),
+            gr.update(value=ready_summary(), visible=True),
         )
         try:
             normalized = validate_user_intent(intent)
@@ -59,31 +67,41 @@ def create_general_app():
                 gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(value="Build experiment plan", interactive=True),
+                gr.update(
+                    value=(
+                        '<section class="result-summary" aria-live="polite">'
+                        f'<p class="error-copy">{escape(str(exc))}</p></section>'
+                    ),
+                    visible=True,
+                ),
             )
             return
+        rows = plan_rows(planned["plan"])
         yield (
             planned,
-            gr.update(value=plan_shell(plan_rows(planned["plan"])), visible=True),
+            gr.update(value=plan_shell(rows), visible=True),
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(value="Build experiment plan", interactive=True),
+            gr.update(value=plan_summary(rows), visible=True),
         )
 
     def confirm_and_run(planned):
         if not isinstance(planned, dict):
-            return gr.update(value='<div class="error-copy">Build and confirm a plan first.</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
+            return gr.update(value='<div class="error-copy">Build and confirm a plan first.</div>', visible=True), gr.update(visible=False), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
         try:
             completed = GeneralCoordinatorClient.from_environment().confirm(planned)
             run, plan = completed["run"], completed["plan"]
-            cards = result_shell(result_rows(run, plan))
+            sections = result_rows(run, plan)
+            cards = result_shell(sections)
             details = json.dumps({
                 "model": completed["model"], "plan_id": run["plan_id"], "run_id": run["run_id"],
                 "plan_sha256": run["plan_sha256"], "run_sha256": run["run_sha256"],
                 "policy_sha256": run["execution"]["policy_sha256"],
             }, indent=2, sort_keys=True)
         except (GeneralCoordinatorError, ValueError) as exc:
-            return gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
-        return gr.update(value='<p class="progress-copy">Experiment complete.</p>', visible=True), *[gr.update(value=card, visible=True) for card in cards], gr.update(value=details, visible=True)
+            return gr.update(value=f'<div class="error-copy">{escape(str(exc))}</div>', visible=True), gr.update(value=no_learned_world_image(), visible=True), *[gr.update(visible=False) for _ in range(5)], gr.update(value="", visible=False)
+        return gr.update(value=completed_summary(sections), visible=True), gr.update(value=no_learned_world_image(), visible=True), *[gr.update(value=card, visible=True) for card in cards], gr.update(value=details, visible=True)
 
     with gr.Blocks(title="JUMP — test an idea with a simulation") as demo:
         state = gr.State(None)
@@ -94,9 +112,11 @@ def create_general_app():
         with gr.Row():
             chips = [gr.Button(value, elem_classes=["example-chip"]) for value in EXAMPLES]
         plan_button = gr.Button("Build experiment plan", elem_classes=["run-button"])
+        planning_status = gr.HTML(visible=False)
+        status = gr.HTML(value=ready_summary(), visible=True, autoscroll=True)
         plan_view = gr.HTML(visible=False)
         confirm = gr.Button("Confirm plan and run simulation", visible=False, elem_classes=["run-button"])
-        status = gr.HTML(visible=False)
+        image_status = gr.HTML(visible=False)
         cards = [gr.HTML(visible=False) for _ in range(5)]
         with gr.Accordion("Technical details", open=False):
             details = gr.Code(language="json", visible=False)
@@ -106,10 +126,16 @@ def create_general_app():
         plan_button.click(
             make_plan,
             inputs=question,
-            outputs=[state, plan_view, confirm, status, plan_button],
+            outputs=[state, plan_view, confirm, planning_status, plan_button, status],
             concurrency_limit=1,
         )
-        confirm.click(confirm_and_run, inputs=state, outputs=[status, *cards, details], concurrency_limit=1)
+        confirm.click(
+            confirm_and_run,
+            inputs=state,
+            outputs=[status, image_status, *cards, details],
+            concurrency_limit=1,
+            scroll_to_output=True,
+        )
     demo._jump_css = GENERAL_CSS
     demo.queue(default_concurrency_limit=1)
     return demo
