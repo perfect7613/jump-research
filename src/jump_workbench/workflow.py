@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -205,7 +206,9 @@ def finalize_run(
         raise WorkbenchError("reviewer model must match the frozen planner and predictor model")
     if not isinstance(modal_result, Mapping) or set(modal_result) != {"measurements", "stdout"}:
         raise WorkbenchError("restricted Modal result has invalid fields")
-    measurements = list(modal_result["measurements"])
+    # Seal the same JSON-decoded numeric values that a remote validator will
+    # receive before deriving comparisons or evidence from them.
+    measurements = json.loads(canonical_json(list(modal_result["measurements"])))
     comparisons = comparison_records(prepared.plan, measurements)
     review_input = {
         "plan": prepared.plan,

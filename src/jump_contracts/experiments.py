@@ -11,6 +11,7 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime
+from fractions import Fraction
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
@@ -718,9 +719,22 @@ def _comparison_evidence(
         except KeyError as exc:
             raise ExperimentContractError("comparison is missing a required measured row") from exc
     measurement_id = spec["measurement_id"]
+    # Python 3.12 changed float summation, so recomputing the same HTTP-decoded
+    # rows on a 3.11 executor and a newer client can differ by one ULP. Treat
+    # each canonical JSON number as an exact decimal rational, compute the
+    # difference exactly, then round to binary64 once. This is strict equality,
+    # not a tolerance around a caller-supplied estimate.
+    baseline_total = sum(
+        (_json_number_fraction(row["values"][measurement_id]) for row in baseline_rows),
+        Fraction(),
+    )
+    intervention_total = sum(
+        (_json_number_fraction(row["values"][measurement_id]) for row in intervention_rows),
+        Fraction(),
+    )
     estimate = float(
-        sum(row["values"][measurement_id] for row in intervention_rows) / len(intervention_rows)
-        - sum(row["values"][measurement_id] for row in baseline_rows) / len(baseline_rows)
+        intervention_total / len(intervention_rows)
+        - baseline_total / len(baseline_rows)
     )
     if plan["sampling"]["design"] == "paired_common_random_numbers":
         pair_set = []
@@ -747,6 +761,15 @@ def _comparison_evidence(
             )
         ]
     return pairing_keys, pair_set, estimate
+
+
+def _json_number_fraction(value: Any) -> Fraction:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ExperimentContractError("comparison measurements must be JSON numbers")
+    try:
+        return Fraction(str(value))
+    except (ValueError, ZeroDivisionError) as exc:
+        raise ExperimentContractError("comparison measurements must be finite JSON numbers") from exc
 
 
 __all__ = [

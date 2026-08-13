@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from copy import deepcopy
 from datetime import datetime, timezone
 
@@ -26,6 +27,8 @@ from jump_workbench.workflow import (
     finalize_run,
     prepare_plan,
 )
+from jump_workbench.runtime import _execute_validated_source
+from jump_workbench.templates import compile_model_proposal
 
 
 SOURCE = """\
@@ -141,6 +144,61 @@ def test_confirmation_and_prediction_precede_measurement_and_revision():
     assert run["comparisons"][0]["estimate"] == pytest.approx(1.0)
     assert reviewer_inputs[0]["measurements"] == run["measurements"]
     assert run["execution"]["prediction_recorded_at"] < run["execution"]["started_at"]
+
+
+def test_queue_http_json_round_trip_preserves_exact_recomputed_estimate():
+    proposal = compile_model_proposal({
+        "template_id": "queue_capacity",
+        "hypothesis": "Increasing service capacity reduces average queue length in this toy simulation.",
+    })
+    planned = prepare_plan(
+        "Does increasing queue capacity reduce average queue length?",
+        session_id="queue-session",
+        request_id="queue-http-round-trip",
+        seed=7613,
+        repetitions=8,
+        model=_model(),
+        planner=lambda _request: proposal,
+    )
+    prepared = confirm_and_predict(
+        planned,
+        confirmed=True,
+        model=_model(),
+        predictor=lambda _plan: {
+            "summary": "Higher capacity should reduce average queue length.",
+            "claims": [{
+                "target_id": "capacity_effect",
+                "expected_relation": "less",
+                "rationale": "More agents can leave the queue at each step.",
+                "expected_value": None,
+            }],
+        },
+        now=lambda: datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc),
+    )
+    modal_result = _execute_validated_source(prepared.source, prepared.plan)
+    run = finalize_run(
+        prepared,
+        modal_result,
+        modal_call_id="fc-queue-http-round-trip",
+        code_version="b" * 40,
+        started_at=datetime(2026, 8, 13, 10, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 8, 13, 10, 2, tzinfo=timezone.utc),
+        model=_model(),
+        reviewer=lambda _value: {
+            "disposition": "retain",
+            "interpretation": "The simulated intervention had the lower measured mean queue length.",
+            "next_plan_sha256": None,
+        },
+    )
+
+    # JSON is the actual HTTP boundary. The exact value is deliberately one
+    # ULP away from Python 3.11's legacy float-sum result for these eight rows.
+    decoded = json.loads(json.dumps({"plan": prepared.plan, "run": run}, allow_nan=False))
+    assert decoded["run"]["comparisons"][0]["estimate"].hex() == "-0x1.2980000000000p+5"
+
+    from jump_ui.general_client import validate_run_response
+
+    assert validate_run_response(decoded["run"], decoded["plan"]) == decoded["run"]
 
 
 def test_run_requires_plan_evidence_and_complete_row_bound_comparisons():
