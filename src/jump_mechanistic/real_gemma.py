@@ -26,7 +26,6 @@ from jump_contracts import (
     verify_world_model_component_files,
 )
 
-from jump_benchmark.authentic import SerializedLatent, deserialize_latent_tensor
 from jump_benchmark.authentic import matched_world_pair
 from jump_benchmark.authentic_stage_d import (
     BASE_REPO_ID,
@@ -726,13 +725,20 @@ def _validate_arm(
     ) != _sha(arm.learned_latent_envelope):
         raise ValueError("causal arm injection does not bind the learned envelope")
     tensor = learned["tensor"]
-    if tensor["dtype"] != "float32-le" or tensor["shape"] != [16] or tensor["order"] != "C":
-        raise ValueError("causal tracing requires exact float32-le [16] C latent evidence")
-    if injection.get("dtype") != "float32-le" or injection.get("shape") != [16] or injection.get("order") != "C":
+    expected_shape = component_manifest["compatibility"]["latent"]["shape"]
+    if (
+        tensor["dtype"] != "float32-le"
+        or tensor["shape"] != expected_shape
+        or len(expected_shape) != 1
+        or expected_shape[0] < 2
+        or tensor["order"] != "C"
+    ):
+        raise ValueError("causal tracing latent descriptor does not match the verified 1-D float32 distribution")
+    if injection.get("dtype") != "float32-le" or injection.get("shape") != expected_shape or injection.get("order") != "C":
         raise ValueError("causal arm injection tensor descriptor drifted")
     injected_raw_sha = hashlib.sha256(arm.injected_tensor_bytes).hexdigest()
     injected_world_sha = tensor_bytes_sha256(
-        arm.injected_tensor_bytes, dtype="float32-le", shape=[16], order="C"
+        arm.injected_tensor_bytes, dtype="float32-le", shape=expected_shape, order="C"
     )
     if (
         injection.get("raw_bytes_sha256") != injected_raw_sha
@@ -780,6 +786,7 @@ def _validate_permutation(
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("scrambled causal arm requires exact permutation evidence")
     indices = value["indices"]
+    element_count = math.prod(tensor["shape"])
     if (
         value["schema_version"] != LATENT_PERMUTATION_VERSION
         or value["unit"] != "float32_element"
@@ -787,14 +794,14 @@ def _validate_permutation(
         or not isinstance(value["seed"], int)
         or not 0 <= value["seed"] <= 0xFFFFFFFF
         or not isinstance(indices, list)
-        or sorted(indices) != list(range(16))
-        or indices == list(range(16))
+        or sorted(indices) != list(range(element_count))
+        or indices == list(range(element_count))
         or value["indices_sha256"] != _sha(indices)
         or value["source_world_latent_sha256"] != tensor["world_latent_sha256"]
     ):
         raise ValueError("scrambled causal arm permutation metadata drifted")
     expected = b"".join(source_raw[index * 4 : (index + 1) * 4] for index in indices)
-    permuted_sha = tensor_bytes_sha256(expected, dtype="float32-le", shape=[16], order="C")
+    permuted_sha = tensor_bytes_sha256(expected, dtype="float32-le", shape=tensor["shape"], order="C")
     if expected == source_raw or expected != injected_raw or value[
         "permuted_world_latent_sha256"
     ] != permuted_sha:
@@ -822,11 +829,15 @@ def _validated_prompt(tokenizer: Any) -> dict[str, Any]:
 
 
 def _latent_tensor(raw: bytes, world_sha: str, runtime: Mapping[str, Any]) -> Any:
+    torch = _torch()
     model = runtime["model"]
-    device = str(next(model.parameters()).device)
-    return deserialize_latent_tensor(
-        SerializedLatent("float32-le", (16,), raw, world_sha), device=device
-    ).unsqueeze(0)
+    device = next(model.parameters()).device
+    shape = runtime["manifest"]["compatibility"]["latent"]["shape"]
+    if len(shape) != 1 or shape[0] < 2 or len(raw) != shape[0] * 4:
+        raise ValueError("causal latent byte length does not match verified component shape")
+    if tensor_bytes_sha256(raw, dtype="float32-le", shape=shape, order="C") != world_sha:
+        raise ValueError("causal latent tensor hash mismatch")
+    return torch.frombuffer(bytearray(raw), dtype=torch.float32).to(device).reshape(1, shape[0])
 
 
 def _divergence(tokenizer: Any, target: Mapping[str, Any], alternative: Mapping[str, Any]) -> dict[str, Any]:

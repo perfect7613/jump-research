@@ -585,6 +585,7 @@ def authentic_world_long_horizon_stage_b_preflight(
         SOURCE_ENCODER_SHA256,
         SOURCE_RELATIVE_ROOT,
         STAGE_B_MANIFEST_SHA256,
+        dynamic_32d_control_preflight,
     )
     from safetensors.torch import load_file
 
@@ -605,6 +606,7 @@ def authentic_world_long_horizon_stage_b_preflight(
     projector = build_gated_residual_projector(hidden_size, latent_dim=LATENT_DIM)
     if projector.projector.weight.shape != (hidden_size, LATENT_DIM):
         raise RunnerError("Phase B projector shape mismatch")
+    control_seam = dynamic_32d_control_preflight()
     return {
         "status": "passed",
         "manifest_sha256": STAGE_B_MANIFEST_SHA256,
@@ -614,6 +616,7 @@ def authentic_world_long_horizon_stage_b_preflight(
         "hidden_size": hidden_size,
         "latent_dim": LATENT_DIM,
         "prompt_binding": prompt,
+        "dynamic_32d_six_arm_seam": control_seam,
         "source_encoder_sha256": SOURCE_ENCODER_SHA256,
         "source_decoder_sha256": SOURCE_DECODER_SHA256,
         "base_weights_loaded": False,

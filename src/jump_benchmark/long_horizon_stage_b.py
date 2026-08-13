@@ -80,6 +80,17 @@ def stage_b_manifest() -> dict[str, Any]:
     return {
         "schema_version": STAGE_B_VERSION,
         "experiment_id": "track-h-long-horizon-stage-b-gemma-injection-v1",
+        "execution_lineage": {
+            "state": "recovery",
+            "recovery_of": {
+                "prior_manifest_sha256": "00e9457c867b0f2bc7447a8ee59ca4c115d3077a23fd267289a7d2fa467c24bc",
+                "failed_call_ids": ["fc-01KZXKWCAJ90TG4WY6YNNK3M7X"],
+                "partial_inventory_sha256": "f403eace892042c891e4c04050bf1137b8f6044b9dd4e94fcd19f2046de2e1ae",
+                "failure_reason": "shared Stage-D scrambled-z verifier was limited to 16 float32 elements while corrected z is 32D",
+                "source_outputs_reused": False,
+                "source_root_mutated": False,
+            },
+        },
         "claim_label": "Phase B paired frozen-Gemma injection engineering study; no causal or mechanistic claim",
         "world_model": {
             "source_stage_a_manifest_sha256": REPLICATION_MANIFEST_SHA256,
@@ -148,6 +159,79 @@ def stage_b_manifest() -> dict[str, Any]:
 
 
 STAGE_B_MANIFEST_SHA256 = sha256_json(stage_b_manifest())
+
+
+def dynamic_32d_control_preflight() -> dict[str, Any]:
+    """Exercise the actual six-arm executor with independently sealed 32D tensors."""
+    import struct
+
+    checkpoint = "stage-b-" + "4" * 64
+    worlds = {"a": "world-a", "b": "world-b", "w": "world-wrong"}
+    pair_id = "stage-b-preflight-pair"
+    target_a = {"partition": [0, 0, 0, 1, 1, 1], "replacement_law": {"same": "attract", "different": "repel", "exponent": 1}, "adequate": True}
+    target_b = {"partition": [0, 1, 1, 0, 0, 1], "replacement_law": {"same": "repel", "different": "attract", "exponent": 2}, "adequate": True}
+    raw = {
+        key: b"".join(struct.pack("<f", float(offset + index + 1)) for index in range(LATENT_DIM))
+        for offset, key in ((0, "a"), (100, "b"), (200, "w"))
+    }
+
+    def learned(key: str, recipient: str, donor: str | None, answer: dict[str, Any]):
+        evidence = build_learned_latent_evidence(
+            encoder_output=raw[key], decoder_input=bytes(raw[key]), injection_input=memoryview(raw[key]),
+            encoder_observation=bytes(384), encoder_observation_artifact_name=f"{key}.f32le.bin",
+            encoder_observation_media_type="application/octet-stream", dtype="float32-le",
+            shape=[LATENT_DIM], order="C", recipient_world_id=recipient, donor_world_id=donor,
+            world_pair_id=pair_id, tensor_artifact_name=f"{key}-z.f32le.bin",
+            learned_decoder=learned_decoder_identity(
+                artifact_name="decoder/model.safetensors", artifact_sha256="1" * 64,
+                training_manifest_sha256=REPLICATION_MANIFEST_SHA256, code_version=SOURCE_CODE_SHA,
+                architecture="same-z-32d-eight-step-residual-rollout-v3",
+            ), decoded_image=b"<svg/>", decoded_image_media_type="image/svg+xml",
+            answer={"structured_answer": answer, "producer_bindings": {"encoder_artifact_sha256": SOURCE_ENCODER_SHA256}},
+        )
+        return seal_learned_latent_result(
+            evidence, source="cached", manifest_sha256=STAGE_B_MANIFEST_SHA256,
+            run_id=f"preflight-{key}-{recipient}", code_version="3" * 40, checkpoint_id=checkpoint,
+        )
+
+    own = learned("a", worlds["a"], None, target_a)
+    wrong = learned("w", worlds["a"], worlds["w"], target_a)
+    a2b = learned("a", worlds["b"], worlds["a"], target_a)
+    b2a = learned("b", worlds["a"], worlds["b"], target_b)
+    indices = list(reversed(range(LATENT_DIM)))
+    scrambled_binding, raw_s = scrambled_injection(
+        own, raw["a"], tensor_artifact_name="scrambled-z.f32le.bin", seed=33173, indices=indices
+    )
+    answers = {arm: target_a for arm in STAGE_D_ARMS}; answers["swap_b_to_a"] = target_b
+    materials = {
+        "own_z": (worlds["a"], worlds["a"], own, raw["a"], raw["a"], identity_injection(own, raw["a"])),
+        "no_z": (worlds["a"], None, None, None, None, no_z_injection()),
+        "scrambled_z": (worlds["a"], worlds["a"], own, raw["a"], raw_s, scrambled_binding),
+        "wrong_world_z": (worlds["a"], worlds["w"], wrong, raw["w"], raw["w"], identity_injection(wrong, raw["w"])),
+        "swap_a_to_b": (worlds["b"], worlds["a"], a2b, raw["a"], raw["a"], identity_injection(a2b, raw["a"])),
+        "swap_b_to_a": (worlds["a"], worlds["b"], b2a, raw["b"], raw["b"], identity_injection(b2a, raw["b"])),
+    }
+    arm_inputs = {}
+    for arm in STAGE_D_ARMS:
+        recipient, source, latent, source_raw, injected_raw, injection = materials[arm]
+        payload = build_stage_d_control_result(
+            arm_id=arm, checkpoint_id=checkpoint, manifest_sha256=STAGE_B_MANIFEST_SHA256,
+            pair_id=pair_id, recipient_world_id=recipient, source_world_id=source,
+            answer=answers[arm], injection=injection,
+        )
+        sealed = seal_result_envelope(
+            payload, source="cached", manifest_sha256=STAGE_B_MANIFEST_SHA256,
+            run_id=f"preflight-{arm}", code_version="3" * 40, checkpoint_id=checkpoint,
+        )
+        arm_inputs[arm] = StageDArmInput(sealed, "cached", latent, source_raw, injected_raw)
+    spec = StageDControlSpec(
+        checkpoint_id=checkpoint, manifest_sha256=STAGE_B_MANIFEST_SHA256, pair_id=pair_id,
+        cluster_id="preflight", world_a_id=worlds["a"], world_b_id=worlds["b"],
+        wrong_world_id=worlds["w"], world_a_target=target_a, world_b_target=target_b,
+    )
+    result = execute_stage_d_control_set(spec, arm_inputs)
+    result.verify()
+    return {"arms": len(result.arms), "latent_dim": LATENT_DIM, "scrambled_differs": raw_s != raw["a"], "content_sha256": result.content_sha256}
 
 
 def _episode(seed: int, split: str) -> dict[str, Any]:
