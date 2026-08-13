@@ -275,6 +275,11 @@ def verify_world_model_component_files(
                     raise EvidenceError(f"world model {role} config is not valid JSON") from exc
                 if not isinstance(parsed, dict):
                     raise EvidenceError(f"world model {role} config must be a JSON object")
+                normalize_json_object(parsed, f"world model {role} config")
+                if "auto_map" in parsed or parsed.get("trust_remote_code") not in (None, False):
+                    raise EvidenceError(
+                        f"world model {role} config may not request remote code execution"
+                    )
             role_paths[kind] = path
         verified[role] = role_paths
     return verified
@@ -377,6 +382,11 @@ def validate_world_model_load_record(
         raise EvidenceError(f"world model load mode must be one of {WORLD_MODEL_LOAD_MODES}")
     if expected_mode is not None and mode != expected_mode:
         raise EvidenceError("load record does not match the expected mode")
+    status = manifest["status"]
+    if mode == "artifact_only" and not status["artifact_only_ready"]:
+        raise EvidenceError("artifact-only world model load is not ready")
+    if mode == "gated_gemma" and not status["end_to_end_injection"]:
+        raise EvidenceError("gated Gemma load requires verified end-to-end injection")
     roles = manifest["load_contract"]["modes"][mode]["components"]
     expected_hashes = {
         role: manifest["components"][role]["identity_sha256"] for role in roles

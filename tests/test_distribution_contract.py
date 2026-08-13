@@ -235,6 +235,30 @@ def test_component_verification_rejects_checksum_drift_and_extra_directory_files
         verify_world_model_component_files(manifest, tmp_path, roles=["encoder"])
 
 
+def test_component_config_cannot_request_arbitrary_remote_code(tmp_path):
+    manifest = _manifest(tmp_path)
+    config_record = manifest["components"]["encoder"]["config"]
+    config_path = tmp_path / config_record["path"]
+    unsafe = json.dumps({"auto_map": {"AutoModel": "model.Custom"}}).encode()
+    config_path.write_bytes(unsafe)
+    config_record["sha256"] = _sha(unsafe)
+    component = manifest["components"]["encoder"]
+    core = {key: value for key, value in component.items() if key != "identity_sha256"}
+    component["identity_sha256"] = _sha(
+        json.dumps(core, sort_keys=True, separators=(",", ":")).encode()
+    )
+    manifest["compatibility"]["component_identity_sha256"]["encoder"] = component[
+        "identity_sha256"
+    ]
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["manifest_sha256"] = _sha(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+    with pytest.raises(EvidenceError, match="remote code execution"):
+        verify_world_model_component_files(manifest, tmp_path, roles=["encoder"])
+
+
 def test_gemma_adapter_requires_peft_filenames_and_colocated_config(tmp_path):
     manifest = _manifest(tmp_path)
     bad = copy.deepcopy(manifest)
