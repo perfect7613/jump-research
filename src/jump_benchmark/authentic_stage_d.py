@@ -146,6 +146,15 @@ def stage_d_manifest() -> dict[str, Any]:
             "retry_aware_forecast_usd": 7.8984,
             "hard_ceiling_usd": 20.0,
             "stage_r_auto_launch": False,
+            "dependency_lock": {
+                "accelerate": "1.10.1",
+                "huggingface_hub": "1.5.0",
+                "jsonschema": "4.26.0",
+                "numpy": "2.3.2",
+                "safetensors": "0.8.0",
+                "torch": "2.11.0",
+                "transformers_source_sha": TRANSFORMERS_REVISION,
+            },
         },
         "claims": {
             "informative_z": False,

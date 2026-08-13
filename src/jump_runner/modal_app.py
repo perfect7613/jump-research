@@ -63,7 +63,7 @@ stage_d_image = (
     .apt_install("git")
     .pip_install(
         "accelerate==1.10.1",
-        "huggingface_hub==0.34.4",
+        "huggingface_hub==1.5.0",
         "jsonschema==4.26.0",
         "numpy==2.3.2",
         "safetensors==0.8.0",
