@@ -16,6 +16,7 @@ from jump_contracts.experiments import (
     comparison_records,
     validate_experiment_plan,
 )
+from jump_contracts.evidence import seal_result_envelope
 
 from .safety import sandbox_declaration
 
@@ -160,6 +161,8 @@ def confirm_and_predict(
     if confirmed is not True:
         raise ConfirmationRequired("the user must confirm the exact sealed plan")
     model.validate()
+    if planned.get("model") != model:
+        raise WorkbenchError("predictor model must match the frozen planner model")
     plan = validate_experiment_plan(planned.get("plan", {}))
     source = planned.get("source")
     if not isinstance(source, str) or sandbox_declaration(source) != plan["sandbox"]:
@@ -198,6 +201,8 @@ def finalize_run(
     if prepared.state != "prediction_ready":
         raise ConfirmationRequired("execution requires a confirmed plan and recorded prediction")
     model.validate()
+    if prepared.model != model:
+        raise WorkbenchError("reviewer model must match the frozen planner and predictor model")
     if not isinstance(modal_result, Mapping) or set(modal_result) != {"measurements", "stdout"}:
         raise WorkbenchError("restricted Modal result has invalid fields")
     measurements = list(modal_result["measurements"])
@@ -214,18 +219,37 @@ def finalize_run(
     run_result = {
         "schema_version": "jump.run-result/v1",
         "status": "completed",
+        "metrics": [
+            {"name": comparison["id"], "value": comparison["estimate"]}
+            for comparison in comparisons
+        ],
+        "artifacts": [],
+        "provenance": {
+            "manifest_sha256": prepared.plan["plan_sha256"],
+            "run_id": modal_call_id,
+            "code_version": code_version,
+            "source_sha256": prepared.plan["sandbox"]["source"]["sha256"],
+            "policy_sha256": prepared.plan["sandbox"]["policy_sha256"],
+        },
         "plan_sha256": prepared.plan["plan_sha256"],
         "measurements": measurements,
         "comparisons": comparisons,
     }
-    artifact_inventory: list[Any] = []
-    sealed_payload = {
+    payload = {
         "plan_sha256": prepared.plan["plan_sha256"],
         "prediction": prepared.prediction,
         "measurements": measurements,
         "comparisons": comparisons,
         "revision": revision,
     }
+    sealed_result = seal_result_envelope(
+        payload,
+        source="live",
+        manifest_sha256=prepared.plan["plan_sha256"],
+        run_id=modal_call_id,
+        code_version=code_version,
+        checkpoint_id=prepared.plan["plan_id"],
+    )
     prediction_sha = hashlib.sha256(canonical_json(prepared.prediction)).hexdigest()
     execution = {
         "plan_sha256": prepared.plan["plan_sha256"],
@@ -254,8 +278,8 @@ def finalize_run(
         return build_experiment_run(
             prepared.plan,
             verified_run_result=run_result,
-            verified_artifact_inventory=artifact_inventory,
-            verified_sealed_payload=sealed_payload,
+            artifact_bytes={},
+            sealed_result=sealed_result,
             plan_id=prepared.plan["plan_id"],
             plan_sha256=prepared.plan["plan_sha256"],
             status="completed",

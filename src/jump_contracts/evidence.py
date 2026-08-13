@@ -213,6 +213,67 @@ def load_verified_run_evidence(
     return result
 
 
+def validate_run_evidence_object(
+    value: Mapping[str, Any] | bytes,
+    *,
+    artifact_bytes: Mapping[str, bytes],
+    expected_manifest_sha256: str,
+    expected_run_id: str,
+    expected_code_version: str,
+    require_completed: bool = True,
+) -> dict[str, Any]:
+    """Verify a canonical run result and its declared artifact bytes in memory."""
+    if isinstance(value, bytes):
+        try:
+            decoded = json.loads(value)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise EvidenceError(f"run evidence bytes are not valid JSON: {exc}") from exc
+        if canonical_json(decoded) != value:
+            raise EvidenceError("run evidence bytes must use canonical JSON encoding")
+        value = decoded
+    result = normalize_json_object(value, "run evidence")
+    if result.get("schema_version") != RUN_RESULT_VERSION:
+        raise EvidenceError(f"schema_version must be {RUN_RESULT_VERSION}")
+    if result.get("status") not in {"completed", "failed"}:
+        raise EvidenceError("run evidence status must be completed or failed")
+    if require_completed and result["status"] != "completed":
+        raise EvidenceError("run evidence is not completed")
+    _validate_metrics(result.get("metrics"))
+    records = result.get("artifacts")
+    if not isinstance(records, list):
+        raise EvidenceError("run evidence artifacts must be an array")
+    if not isinstance(artifact_bytes, Mapping) or any(
+        not isinstance(path, str) or not isinstance(content, bytes)
+        for path, content in artifact_bytes.items()
+    ):
+        raise EvidenceError("artifact_bytes must map relative paths to bytes")
+    declared_paths: set[str] = set()
+    declared_names: set[str] = set()
+    for index, record in enumerate(records):
+        _validate_artifact_record(record, where=f"artifact {index}")
+        path = _relative_artifact_path(record["path"])
+        if path in declared_paths or record["name"] in declared_names:
+            raise EvidenceError("artifact paths and names must be unique")
+        declared_paths.add(path)
+        declared_names.add(record["name"])
+        if path not in artifact_bytes:
+            raise EvidenceError(f"declared artifact bytes are missing: {path}")
+        if _sha256_bytes(artifact_bytes[path]) != record["sha256"]:
+            raise EvidenceError(f"artifact hash mismatch: {path}")
+    if set(artifact_bytes) != declared_paths:
+        raise EvidenceError("artifact bytes must exactly match the declared inventory")
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict):
+        raise EvidenceError("run evidence requires provenance")
+    if provenance.get("manifest_sha256") != expected_manifest_sha256:
+        raise EvidenceError("run evidence does not match the expected manifest")
+    if provenance.get("run_id") != expected_run_id:
+        raise EvidenceError("run evidence does not match the expected run identity")
+    if provenance.get("code_version") != expected_code_version:
+        raise EvidenceError("run evidence does not match the expected code version")
+    return result
+
+
 def read_verified_artifact(
     result_path: str | Path,
     name: str,

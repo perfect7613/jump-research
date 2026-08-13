@@ -15,6 +15,8 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from .evidence import EvidenceError, open_result_envelope, validate_run_evidence_object
+
 EXPERIMENT_PLAN_VERSION = "jump.experiment-plan/v1"
 EXPERIMENT_RUN_VERSION = "jump.experiment-run/v1"
 RESTRICTED_ADAPTER_ID = "modal.restricted-python-simulation/v1"
@@ -390,8 +392,8 @@ def build_experiment_run(
     plan: Mapping[str, Any],
     *,
     verified_run_result: Mapping[str, Any] | bytes,
-    verified_artifact_inventory: list[Any] | bytes,
-    verified_sealed_payload: Mapping[str, Any] | bytes,
+    artifact_bytes: Mapping[str, bytes],
+    sealed_result: Mapping[str, Any] | bytes,
     **fields: Any,
 ) -> dict[str, Any]:
     """Build a run from an exact plan and independently supplied evidence bytes."""
@@ -403,10 +405,7 @@ def build_experiment_run(
         raise ExperimentContractError("run fields must bind the required ExperimentPlan")
     if not isinstance(run.get("evidence"), dict):
         raise ExperimentContractError("run requires an evidence record")
-    evidence_hashes = _verified_evidence_hashes(
-        verified_run_result, verified_artifact_inventory, verified_sealed_payload,
-        expected_plan_sha256=checked_plan["plan_sha256"],
-    )
+    evidence_hashes = _verify_evidence(run, checked_plan, verified_run_result, artifact_bytes, sealed_result)
     run["evidence"].update(evidence_hashes)
     digest = _content_hash(run, id_key="run_id", hash_key="run_sha256")
     run["run_id"] = f"run-{digest[:24]}"
@@ -415,8 +414,8 @@ def build_experiment_run(
         run,
         checked_plan,
         verified_run_result=verified_run_result,
-        verified_artifact_inventory=verified_artifact_inventory,
-        verified_sealed_payload=verified_sealed_payload,
+        artifact_bytes=artifact_bytes,
+        sealed_result=sealed_result,
     )
     return run
 
@@ -426,8 +425,8 @@ def validate_experiment_run(
     plan: Mapping[str, Any],
     *,
     verified_run_result: Mapping[str, Any] | bytes,
-    verified_artifact_inventory: list[Any] | bytes,
-    verified_sealed_payload: Mapping[str, Any] | bytes,
+    artifact_bytes: Mapping[str, bytes],
+    sealed_result: Mapping[str, Any] | bytes,
 ) -> dict[str, Any]:
     run = deepcopy(dict(value))
     checked_plan = validate_experiment_plan(plan)
@@ -442,44 +441,82 @@ def validate_experiment_run(
     if run["execution"]["prediction_sha256"] != hashlib.sha256(canonical_json(run["execution"]["prediction"])).hexdigest():
         raise ExperimentContractError("prediction_sha256 does not bind the prediction")
     _validate_prediction_order(run["execution"])
+    verified_hashes = _verify_evidence(
+        run, checked_plan, verified_run_result, artifact_bytes, sealed_result
+    )
     if {
         key: run["evidence"][key]
         for key in ("run_result_sha256", "artifact_inventory_sha256", "sealed_payload_sha256")
-    } != _verified_evidence_hashes(
-        verified_run_result, verified_artifact_inventory, verified_sealed_payload,
-        expected_plan_sha256=checked_plan["plan_sha256"],
-    ):
+    } != verified_hashes:
         raise ExperimentContractError("evidence hashes do not match the verified evidence objects")
-    _validate_evidence_payloads(
-        run, verified_run_result, verified_artifact_inventory, verified_sealed_payload
-    )
     _validate_run_against_plan(run, checked_plan)
     return run
 
 
-def _verified_evidence_hashes(
+def _verify_evidence(
+    run: Mapping[str, Any],
+    plan: Mapping[str, Any],
     run_result: Mapping[str, Any] | bytes,
-    artifact_inventory: list[Any] | bytes,
-    sealed_payload: Mapping[str, Any] | bytes,
-    *,
-    expected_plan_sha256: str,
+    artifact_bytes: Mapping[str, bytes],
+    sealed_result: Mapping[str, Any] | bytes,
 ) -> dict[str, str]:
-    run_result, run_result_bytes = _verified_json(run_result, Mapping, "run result")
-    artifact_inventory, artifact_bytes = _verified_json(artifact_inventory, list, "artifact inventory")
-    sealed_payload, sealed_bytes = _verified_json(sealed_payload, Mapping, "sealed payload")
-    if run_result.get("schema_version") != "jump.run-result/v1":
-        raise ExperimentContractError("verified run result must be jump.run-result/v1")
-    if run_result.get("plan_sha256") != expected_plan_sha256:
-        raise ExperimentContractError("verified run result does not bind the required plan")
-    if sealed_payload.get("plan_sha256") != expected_plan_sha256:
-        raise ExperimentContractError("verified sealed payload does not bind the required plan")
-    for record in artifact_inventory:
-        if not isinstance(record, Mapping) or record.get("plan_sha256") != expected_plan_sha256:
-            raise ExperimentContractError("each artifact inventory record must bind the required plan")
+    execution = run.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ExperimentContractError("run execution is required before evidence can be verified")
+    modal_call_id = execution.get("modal_call_id")
+    if not isinstance(modal_call_id, str) or not modal_call_id:
+        raise ExperimentContractError("verified evidence requires a Modal call identity")
+    run_result_value, run_result_bytes = _verified_json(run_result, Mapping, "run result")
+    sealed_value, _ = _verified_json(sealed_result, Mapping, "sealed result")
+    try:
+        normative_result = validate_run_evidence_object(
+            run_result_value,
+            artifact_bytes=artifact_bytes,
+            expected_manifest_sha256=plan["plan_sha256"],
+            expected_run_id=modal_call_id,
+            expected_code_version=execution["code_version"],
+            require_completed=run.get("status") == "completed",
+        )
+        payload = open_result_envelope(
+            sealed_value,
+            expected_source="live",
+            expected_manifest_sha256=plan["plan_sha256"],
+            expected_checkpoint_id=plan["plan_id"],
+        )
+    except EvidenceError as exc:
+        raise ExperimentContractError(f"canonical evidence verification failed: {exc}") from exc
+    provenance = normative_result["provenance"]
+    if normative_result["status"] != run["status"]:
+        raise ExperimentContractError("run evidence status does not match the ExperimentRun")
+    if provenance.get("source_sha256") != execution["source_sha256"]:
+        raise ExperimentContractError("run evidence source does not match execution")
+    if provenance.get("policy_sha256") != execution["policy_sha256"]:
+        raise ExperimentContractError("run evidence policy does not match execution")
+    if normative_result.get("plan_sha256") != plan["plan_sha256"]:
+        raise ExperimentContractError("run evidence does not repeat the required plan")
+    if normative_result.get("measurements") != run["measurements"]:
+        raise ExperimentContractError("run evidence measurements do not match the ExperimentRun")
+    if normative_result.get("comparisons") != run["comparisons"]:
+        raise ExperimentContractError("run evidence comparisons do not match the ExperimentRun")
+    sealed_provenance = sealed_value["provenance"]
+    if sealed_provenance["run_id"] != modal_call_id:
+        raise ExperimentContractError("sealed result does not match the Modal call identity")
+    if sealed_provenance["code_version"] != execution["code_version"]:
+        raise ExperimentContractError("sealed result does not match the execution code version")
+    expected_payload = {
+        "plan_sha256": run["plan_sha256"],
+        "prediction": run["execution"]["prediction"],
+        "measurements": run["measurements"],
+        "comparisons": run["comparisons"],
+        "revision": run["revision"],
+    }
+    if payload != expected_payload:
+        raise ExperimentContractError("sealed result payload does not match the ExperimentRun")
+    inventory_bytes = canonical_json(normative_result["artifacts"])
     return {
         "run_result_sha256": hashlib.sha256(run_result_bytes).hexdigest(),
-        "artifact_inventory_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
-        "sealed_payload_sha256": hashlib.sha256(sealed_bytes).hexdigest(),
+        "artifact_inventory_sha256": hashlib.sha256(inventory_bytes).hexdigest(),
+        "sealed_payload_sha256": sealed_value["payload_sha256"],
     }
 
 
@@ -496,33 +533,6 @@ def _verified_json(value: Any, expected_type: type, label: str) -> tuple[Any, by
     if not isinstance(value, expected_type):
         raise ExperimentContractError(f"verified {label} has the wrong JSON type")
     return value, canonical_json(value)
-
-
-def _validate_evidence_payloads(
-    run: Mapping[str, Any],
-    run_result_value: Mapping[str, Any] | bytes,
-    artifact_inventory_value: list[Any] | bytes,
-    sealed_payload_value: Mapping[str, Any] | bytes,
-) -> None:
-    run_result, _ = _verified_json(run_result_value, Mapping, "run result")
-    artifact_inventory, _ = _verified_json(artifact_inventory_value, list, "artifact inventory")
-    sealed_payload, _ = _verified_json(sealed_payload_value, Mapping, "sealed payload")
-    if run_result.get("status") != run["status"]:
-        raise ExperimentContractError("verified run result status does not match the ExperimentRun")
-    for key in ("measurements", "comparisons"):
-        if run_result.get(key) != run[key]:
-            raise ExperimentContractError(f"verified run result {key} do not match the ExperimentRun")
-    expected_sealed = {
-        "plan_sha256": run["plan_sha256"],
-        "prediction": run["execution"]["prediction"],
-        "measurements": run["measurements"],
-        "comparisons": run["comparisons"],
-        "revision": run["revision"],
-    }
-    if sealed_payload != expected_sealed:
-        raise ExperimentContractError("verified sealed payload does not match the ExperimentRun")
-    if artifact_inventory and run["status"] != "completed":
-        raise ExperimentContractError("failed runs cannot publish artifacts")
 
 
 def _validate_schema(schema: Mapping[str, Any], value: Any, label: str) -> None:

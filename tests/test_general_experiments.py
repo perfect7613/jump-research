@@ -18,6 +18,7 @@ from jump_contracts.experiments import (
     validate_experiment_plan,
     validate_experiment_run,
 )
+from jump_contracts.evidence import seal_result_envelope
 from jump_workbench.workflow import (
     ConfirmationRequired,
     FrozenModel,
@@ -160,10 +161,21 @@ def test_run_requires_plan_evidence_and_complete_row_bound_comparisons():
                 "policy_sha256": execution["policy_sha256"], "code_version": execution["code_version"],
                 "modal_call_id": "fc-test", "run_result_sha256": "0" * 64,
                 "artifact_inventory_sha256": "0" * 64, "sealed_payload_sha256": "0" * 64}
-    run_result = {"schema_version": "jump.run-result/v1", "status": "completed", "plan_sha256": plan["plan_sha256"], "measurements": rows, "comparisons": comparisons}
-    sealed = {"plan_sha256": plan["plan_sha256"], "prediction": prediction, "measurements": rows, "comparisons": comparisons, "revision": revision}
+    run_result = {
+        "schema_version": "jump.run-result/v1", "status": "completed",
+        "metrics": [{"name": "offset_effect", "value": 1.0}], "artifacts": [],
+        "provenance": {"manifest_sha256": plan["plan_sha256"], "run_id": "fc-test",
+                       "code_version": "b" * 40, "source_sha256": execution["source_sha256"],
+                       "policy_sha256": execution["policy_sha256"]},
+        "plan_sha256": plan["plan_sha256"], "measurements": rows, "comparisons": comparisons,
+    }
+    sealed_payload = {"plan_sha256": plan["plan_sha256"], "prediction": prediction, "measurements": rows, "comparisons": comparisons, "revision": revision}
+    sealed = seal_result_envelope(
+        sealed_payload, source="live", manifest_sha256=plan["plan_sha256"], run_id="fc-test",
+        code_version="b" * 40, checkpoint_id=plan["plan_id"],
+    )
     run = build_experiment_run(
-        plan, verified_run_result=run_result, verified_artifact_inventory=[], verified_sealed_payload=sealed,
+        plan, verified_run_result=run_result, artifact_bytes={}, sealed_result=sealed,
         plan_id=plan["plan_id"], plan_sha256=plan["plan_sha256"], status="completed", execution=execution,
         measurements=rows, comparisons=comparisons, revision=revision, evidence=evidence,
     )
@@ -172,23 +184,63 @@ def test_run_requires_plan_evidence_and_complete_row_bound_comparisons():
     tampered_comparisons = deepcopy(comparisons)
     tampered_comparisons[0]["estimate"] = 9.0
     tampered_result = {**run_result, "comparisons": tampered_comparisons}
-    tampered_sealed = {**sealed, "comparisons": tampered_comparisons}
+    tampered_sealed = seal_result_envelope(
+        {**sealed_payload, "comparisons": tampered_comparisons}, source="live",
+        manifest_sha256=plan["plan_sha256"], run_id="fc-test", code_version="b" * 40,
+        checkpoint_id=plan["plan_id"],
+    )
     with pytest.raises(ExperimentContractError, match="recomputed"):
         build_experiment_run(
-            plan, verified_run_result=tampered_result,
-            verified_artifact_inventory=[], verified_sealed_payload=tampered_sealed,
+            plan, verified_run_result=tampered_result, artifact_bytes={}, sealed_result=tampered_sealed,
             plan_id=plan["plan_id"], plan_sha256=plan["plan_sha256"], status="completed",
             execution=execution, measurements=rows, comparisons=tampered_comparisons,
             revision=revision, evidence=evidence,
         )
     incomplete_rows = rows[:-1]
     incomplete_result = {**run_result, "measurements": incomplete_rows}
-    incomplete_sealed = {**sealed, "measurements": incomplete_rows}
+    incomplete_sealed = seal_result_envelope(
+        {**sealed_payload, "measurements": incomplete_rows}, source="live",
+        manifest_sha256=plan["plan_sha256"], run_id="fc-test", code_version="b" * 40,
+        checkpoint_id=plan["plan_id"],
+    )
     with pytest.raises(ExperimentContractError, match="every condition/repetition"):
         build_experiment_run(
-            plan, verified_run_result=incomplete_result,
-            verified_artifact_inventory=[], verified_sealed_payload=incomplete_sealed,
+            plan, verified_run_result=incomplete_result, artifact_bytes={}, sealed_result=incomplete_sealed,
             plan_id=plan["plan_id"], plan_sha256=plan["plan_sha256"], status="completed",
             execution=execution, measurements=incomplete_rows, comparisons=comparisons,
             revision=revision, evidence=evidence,
+        )
+
+
+def test_run_rejects_result_from_a_different_modal_call():
+    planned = _planned()
+    prepared = confirm_and_predict(
+        planned, confirmed=True, model=_model(), predictor=_prediction,
+        now=lambda: datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc),
+    )
+    run = finalize_run(
+        prepared, _modal_result(prepared.plan), modal_call_id="fc-call-a", code_version="b" * 40,
+        started_at=datetime(2026, 8, 13, 10, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 8, 13, 10, 2, tzinfo=timezone.utc), model=_model(),
+        reviewer=lambda _value: {"disposition": "retain", "interpretation": "Retain.", "next_plan_sha256": None},
+    )
+    rows = run["measurements"]
+    comparisons = run["comparisons"]
+    result_from_b = {
+        "schema_version": "jump.run-result/v1", "status": "completed",
+        "metrics": [{"name": "offset_effect", "value": 1.0}], "artifacts": [],
+        "provenance": {"manifest_sha256": prepared.plan["plan_sha256"], "run_id": "fc-call-b",
+                       "code_version": "b" * 40, "source_sha256": run["execution"]["source_sha256"],
+                       "policy_sha256": run["execution"]["policy_sha256"]},
+        "plan_sha256": prepared.plan["plan_sha256"], "measurements": rows, "comparisons": comparisons,
+    }
+    sealed_a = seal_result_envelope(
+        {"plan_sha256": prepared.plan["plan_sha256"], "prediction": run["execution"]["prediction"],
+         "measurements": rows, "comparisons": comparisons, "revision": run["revision"]},
+        source="live", manifest_sha256=prepared.plan["plan_sha256"], run_id="fc-call-a",
+        code_version="b" * 40, checkpoint_id=prepared.plan["plan_id"],
+    )
+    with pytest.raises(ExperimentContractError, match="run identity"):
+        validate_experiment_run(
+            run, prepared.plan, verified_run_result=result_from_b, artifact_bytes={}, sealed_result=sealed_a,
         )
