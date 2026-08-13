@@ -19,6 +19,9 @@ RUN_RESPONSE_VERSION = "jump.experiment-run-response/v1"
 GENERAL_COORDINATOR_URL = (
     "https://ameymuke252003--jump-general-experiment-workbench-genera-d81606.modal.run"
 )
+EXPECTED_COORDINATOR_CODE_VERSION = "d457474d5acf82ef54dad231236093c941a7de2c"
+EXPECTED_PLAN_SCHEMA_SHA256 = "4cadd0c9859add72c5c71c4cca0e71e3f0a7b5deb398948ae205a238035ffc08"
+EXPECTED_RUN_SCHEMA_SHA256 = "5e6be146224d6ae7661be9f911a0bce47df4bb5d145ee83967bc446c7ffc97ca"
 EXPECTED_MODEL = {
     "repo_id": "google/gemma-4-12B-it",
     "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
@@ -37,6 +40,7 @@ class GeneralCoordinatorClient:
     base_url: str
     token: str
     timeout_seconds: float = 300.0
+    expected_code_version: str | None = None
 
     @classmethod
     def from_environment(cls) -> "GeneralCoordinatorClient":
@@ -45,7 +49,29 @@ class GeneralCoordinatorClient:
             raise GeneralCoordinatorError(
                 "The general coordinator is not configured. No result was substituted."
             )
-        return cls(base_url=GENERAL_COORDINATOR_URL, token=token)
+        expected_environment = {
+            "JUMP_GENERAL_ENDPOINT": GENERAL_COORDINATOR_URL,
+            "JUMP_GENERAL_CODE_VERSION": EXPECTED_COORDINATOR_CODE_VERSION,
+            "JUMP_GENERAL_MODEL_REPO_ID": EXPECTED_MODEL["repo_id"],
+            "JUMP_GENERAL_MODEL_REVISION": EXPECTED_MODEL["revision"],
+            "JUMP_GENERAL_TRANSFORMERS_REVISION": EXPECTED_MODEL["transformers_revision"],
+            "JUMP_GENERAL_PLAN_SCHEMA_SHA256": EXPECTED_PLAN_SCHEMA_SHA256,
+            "JUMP_GENERAL_RUN_SCHEMA_SHA256": EXPECTED_RUN_SCHEMA_SHA256,
+        }
+        mismatched = [
+            name for name, expected in expected_environment.items()
+            if os.environ.get(name, "").strip() != expected
+        ]
+        if mismatched:
+            raise GeneralCoordinatorError(
+                "The general coordinator deployment pins are missing or unreviewed: "
+                + ", ".join(mismatched)
+            )
+        return cls(
+            base_url=os.environ["JUMP_GENERAL_ENDPOINT"].strip(),
+            token=token,
+            expected_code_version=os.environ["JUMP_GENERAL_CODE_VERSION"].strip(),
+        )
 
     def plan(self, request: Mapping[str, Any]) -> dict[str, Any]:
         expected = {"schema_version", "request_id", "session_id", "intent", "seed", "repetitions"}
@@ -88,6 +114,11 @@ class GeneralCoordinatorClient:
             payload["run"] = validate_run_response(payload["run"], returned_plan)
         except (KeyError, TypeError, ValueError) as exc:
             raise GeneralCoordinatorError(f"The run response failed direct validation: {exc}") from exc
+        if (
+            self.expected_code_version is not None
+            and payload["run"]["execution"]["code_version"] != self.expected_code_version
+        ):
+            raise GeneralCoordinatorError("The run response code version does not match the reviewed deployment.")
         return payload
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:

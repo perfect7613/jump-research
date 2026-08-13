@@ -7,7 +7,10 @@ import urllib.error
 import pytest
 
 from jump_ui.general_client import (
+    EXPECTED_COORDINATOR_CODE_VERSION,
     EXPECTED_MODEL,
+    EXPECTED_PLAN_SCHEMA_SHA256,
+    EXPECTED_RUN_SCHEMA_SHA256,
     GENERAL_COORDINATOR_URL,
     GeneralCoordinatorClient,
     GeneralCoordinatorError,
@@ -139,7 +142,25 @@ def test_unsupported_coordinator_detail_is_shown_without_fallback(monkeypatch):
 
 def test_environment_client_uses_only_reviewed_endpoint_and_server_token(monkeypatch):
     monkeypatch.setenv("JUMP_MODAL_TOKEN", "server-token")
-    monkeypatch.setenv("JUMP_GENERAL_COORDINATOR_URL", "https://unreviewed.invalid")
+    variables = {
+        "JUMP_GENERAL_ENDPOINT": GENERAL_COORDINATOR_URL,
+        "JUMP_GENERAL_CODE_VERSION": EXPECTED_COORDINATOR_CODE_VERSION,
+        "JUMP_GENERAL_MODEL_REPO_ID": EXPECTED_MODEL["repo_id"],
+        "JUMP_GENERAL_MODEL_REVISION": EXPECTED_MODEL["revision"],
+        "JUMP_GENERAL_TRANSFORMERS_REVISION": EXPECTED_MODEL["transformers_revision"],
+        "JUMP_GENERAL_PLAN_SCHEMA_SHA256": EXPECTED_PLAN_SCHEMA_SHA256,
+        "JUMP_GENERAL_RUN_SCHEMA_SHA256": EXPECTED_RUN_SCHEMA_SHA256,
+    }
+    for name, value in variables.items():
+        monkeypatch.setenv(name, value)
     client = GeneralCoordinatorClient.from_environment()
     assert client.base_url == GENERAL_COORDINATOR_URL
     assert client.token == "server-token"
+    assert client.expected_code_version == EXPECTED_COORDINATOR_CODE_VERSION
+
+
+def test_environment_client_rejects_unreviewed_deployment_pin(monkeypatch):
+    monkeypatch.setenv("JUMP_MODAL_TOKEN", "server-token")
+    monkeypatch.setenv("JUMP_GENERAL_ENDPOINT", "https://unreviewed.invalid")
+    with pytest.raises(GeneralCoordinatorError, match="JUMP_GENERAL_ENDPOINT"):
+        GeneralCoordinatorClient.from_environment()
