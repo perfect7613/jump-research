@@ -616,7 +616,7 @@ def submit_stage_d(
 
 @app.function(
     image=live_gateway_image,
-    timeout=60,
+    timeout=900,
     max_containers=1,
     secrets=[
         modal.Secret.from_name("jump-authentic-live-auth", required_keys=["JUMP_MODAL_TOKEN"]),
