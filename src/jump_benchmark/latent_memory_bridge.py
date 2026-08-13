@@ -42,7 +42,7 @@ def manifest() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "experiment_id": "track-h-token-conditioned-latent-memory-bridge-pilot-v1",
         "hypothesis": "multiple object-specific latent memories injected at selected layers improve frozen Gemma use relative to one global additive vector",
-        "execution_lineage": {"state":"recovery","recovery_of":{"prior_manifest_sha256":"3e0c5fce2a65f3d1b401af45e1930c364c570da0a9699e1eb984b98dd62d7559","failed_call_ids":["fc-01KZYA61H6YRC2AZ0JB20HVP1Q"],"failure_reason":"bridge input z remained float32 while bridge weights were bfloat16","source_outputs_reused":False,"source_root_mutated":False}},
+        "execution_lineage": {"state":"recovery","recovery_of":{"prior_manifest_sha256":"9c951ce5489ea0f1e867237e20fb40fad4faeabe1093e63ceac7235d8a1211a4","failed_call_ids":["fc-01KZYA61H6YRC2AZ0JB20HVP1Q","fc-01KZYADK7178C5SA5D2CD7KK79"],"failure_reason":"first attempt had float32/bfloat16 bridge mismatch; second reached evaluation but the deployed Gemma image omitted the pinned Pillow raster dependency","source_outputs_reused":False,"source_root_mutated":False}},
         "claim_label": "fresh latent-memory bridge engineering pilot; no causal or mechanistic claim",
         "world_model": {
             "source_manifest_sha256": WORLD_MANIFEST_SHA256,

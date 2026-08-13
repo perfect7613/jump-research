@@ -68,6 +68,7 @@ stage_d_image = (
         "huggingface_hub==1.5.0",
         "jsonschema==4.26.0",
         "numpy==2.3.2",
+        "Pillow==11.3.0",
         "safetensors==0.8.0",
         "torch==2.11.0",
         "git+https://github.com/huggingface/transformers.git@918dbf131d0df5b46e3f6e1d96174d62aa4d16d6",
@@ -871,6 +872,7 @@ def _authorize_latent_memory_bridge(*,expected_manifest_sha256:str,expected_code
 @modal.concurrent(max_inputs=1)
 def authentic_world_latent_memory_bridge_preflight(expected_manifest_sha256:str,expected_code_sha:str)->dict[str,Any]:
     import hashlib
+    from PIL import Image
     from transformers import AutoConfig,AutoModelForMultimodalLM
     from jump_benchmark.authentic_stage_d import BASE_REPO_ID,BASE_REVISION
     from jump_benchmark.latent_memory_bridge import MANIFEST_SHA256,SOURCE_HASHES,SOURCE_ROOT,cpu_preflight
