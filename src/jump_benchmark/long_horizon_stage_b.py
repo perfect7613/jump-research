@@ -84,18 +84,25 @@ def stage_b_manifest() -> dict[str, Any]:
         "execution_lineage": {
             "state": "recovery",
             "recovery_of": {
-                "prior_manifest_sha256": "12779307505f4bc9abf8542acb54cc4ead86c749c504e2974e6f145bf731c231",
-                "failed_call_ids": ["fc-01KZXMBB0J4W584XNAANZTC415"],
-                "partial_inventory_sha256": "44c8ce9de35c5029cfeb33c996603f4f3b7e3f29be4e20ca39a22b60225e94df",
-                "failure_reason": "persistent nontextual injection producer retained a 16D serializer assertion while corrected z is 32D",
+                "prior_manifest_sha256": "0fb190497453563cfe7ff231de2cfa90e097597ab99a9a1c856944d8ff0c0617",
+                "failed_call_ids": ["fc-01KZXMQ7PHREXV0R73GASW2E7W"],
+                "partial_inventory_sha256": "298bb4905504b37f9eeb0fb77fd421ebec1d3bb372abc8a5b2c41bcfca818239",
+                "failure_reason": "canonical executor precreated the empty work directory but producer incorrectly required mkdir(exist_ok=False) after training",
                 "source_outputs_reused": False,
                 "source_root_mutated": False,
             },
-            "prior_failed_partial": {
-                "manifest_sha256": "00e9457c867b0f2bc7447a8ee59ca4c115d3077a23fd267289a7d2fa467c24bc",
-                "call_id": "fc-01KZXKWCAJ90TG4WY6YNNK3M7X",
-                "partial_inventory_sha256": "f403eace892042c891e4c04050bf1137b8f6044b9dd4e94fcd19f2046de2e1ae",
-            },
+            "prior_failed_partials": [
+                {
+                    "manifest_sha256": "00e9457c867b0f2bc7447a8ee59ca4c115d3077a23fd267289a7d2fa467c24bc",
+                    "call_id": "fc-01KZXKWCAJ90TG4WY6YNNK3M7X",
+                    "partial_inventory_sha256": "f403eace892042c891e4c04050bf1137b8f6044b9dd4e94fcd19f2046de2e1ae",
+                },
+                {
+                    "manifest_sha256": "12779307505f4bc9abf8542acb54cc4ead86c749c504e2974e6f145bf731c231",
+                    "call_id": "fc-01KZXMBB0J4W584XNAANZTC415",
+                    "partial_inventory_sha256": "44c8ce9de35c5029cfeb33c996603f4f3b7e3f29be4e20ca39a22b60225e94df",
+                },
+            ],
         },
         "claim_label": "Phase B paired frozen-Gemma injection engineering study; no causal or mechanistic claim",
         "world_model": {
@@ -165,6 +172,53 @@ def stage_b_manifest() -> dict[str, Any]:
 
 
 STAGE_B_MANIFEST_SHA256 = sha256_json(stage_b_manifest())
+
+
+def prepare_executor_output_root(
+    output_root: Path, *, expected_manifest_sha256: str, expected_code_sha: str
+) -> None:
+    """Accept only the canonical runner-owned, precreated, empty work directory."""
+    if output_root.is_symlink() or not output_root.is_dir():
+        raise FileExistsError("Phase B requires an existing non-symlink runner work directory")
+    attempt = output_root.parent
+    run_root = attempt.parent.parent
+    expected_paths = {
+        "JUMP_OUTPUT_DIR": output_root,
+        "JUMP_CHECKPOINT_DIR": attempt / "checkpoint",
+        "JUMP_PARAMETERS_PATH": attempt / "task-parameters.json",
+    }
+    for key, path in expected_paths.items():
+        configured = os.environ.get(key)
+        if configured is None or Path(configured).resolve(strict=True) != path.resolve(strict=True):
+            raise RuntimeError(f"Phase B runner path binding mismatch: {key}")
+    if (
+        output_root.name != "work"
+        or attempt.parent.name != "attempts"
+        or len(attempt.name) != 4
+        or not attempt.name.isdigit()
+        or os.environ.get("JUMP_RUN_ID") != "long-horizon-stage-b"
+        or os.environ.get("JUMP_PHASE_ID") != "long-horizon-stage-b"
+        or os.environ.get("JUMP_CODE_VERSION") != expected_code_sha
+    ):
+        raise RuntimeError("Phase B runner identity/path mismatch")
+    for path in (output_root, attempt, attempt.parent, run_root):
+        if path.is_symlink() or path.stat().st_uid != os.getuid():
+            raise RuntimeError("Phase B runner root ownership or symlink check failed")
+    config = json.loads((run_root / "config.json").read_text())
+    started = json.loads((attempt / "started.json").read_text())
+    parameters = json.loads((attempt / "task-parameters.json").read_text())
+    if (
+        config.get("manifest_sha256") != expected_manifest_sha256
+        or config.get("code_version") != expected_code_sha
+        or config.get("run_id") != "long-horizon-stage-b"
+        or config.get("phase_id") != "long-horizon-stage-b"
+        or started.get("manifest_sha256") != expected_manifest_sha256
+        or parameters.get("expected_manifest_sha256") != expected_manifest_sha256
+        or parameters.get("expected_code_sha") != expected_code_sha
+    ):
+        raise RuntimeError("Phase B canonical runner identity files mismatch")
+    if any(output_root.iterdir()):
+        raise FileExistsError("immutable Phase B runner work directory is nonempty")
 
 
 def dynamic_32d_control_preflight() -> dict[str, Any]:
@@ -369,8 +423,11 @@ def train_and_evaluate(*, source_root: Path, output_root: Path, expected_manifes
 
     if expected_manifest_sha256 != STAGE_B_MANIFEST_SHA256 or os.environ.get("JUMP_CODE_VERSION") != expected_code_sha:
         raise ValueError("Phase B immutable identity mismatch before root write")
-    if output_root.exists() and any(output_root.iterdir()):
-        raise FileExistsError("immutable Phase B root exists")
+    prepare_executor_output_root(
+        output_root,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+    )
     if not torch.cuda.is_available():
         raise RuntimeError("Phase B requires CUDA")
     torch.manual_seed(stage_b_manifest()["training"]["seed"]); torch.cuda.manual_seed_all(stage_b_manifest()["training"]["seed"]); torch.cuda.reset_peak_memory_stats()
@@ -394,7 +451,6 @@ def train_and_evaluate(*, source_root: Path, output_root: Path, expected_manifes
     if any(parameter.requires_grad for parameter in model.parameters()):
         raise RuntimeError("frozen Gemma became trainable")
     model.eval();projector.eval();model.config.use_cache=True
-    output_root.mkdir(parents=True,exist_ok=False)
     for role in ("encoder","decoder","future_projector","gemma_adapter"):(output_root/role).mkdir()
     shutil.copyfile(source_root/"encoder.safetensors",output_root/"encoder/model.safetensors")
     shutil.copyfile(source_root/"decoder.safetensors",output_root/"decoder/model.safetensors")

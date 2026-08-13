@@ -607,6 +607,28 @@ def authentic_world_long_horizon_stage_b_preflight(
     if projector.projector.weight.shape != (hidden_size, LATENT_DIM):
         raise RunnerError("Phase B projector shape mismatch")
     control_seam = dynamic_32d_control_preflight()
+    import tempfile
+    with tempfile.TemporaryDirectory() as temporary:
+        phase = {
+            "id": "long-horizon-stage-b",
+            "_preregistration": {"layer_allowlist": [0], "timepoint_allowlist": ["answer"]},
+        }
+        run = {
+            "id": "long-horizon-stage-b",
+            "task": {"module": "jump_benchmark.long_horizon_stage_b_task", "parameters": {
+                "expected_manifest_sha256": expected_manifest_sha256,
+                "expected_code_sha": expected_code_sha,
+                "dry_run": True,
+            }},
+            "resources": {"gpu": "cpu", "timeout_seconds": 60},
+            "selection": {"layers": [], "timepoints": []},
+            "retry": {"max_attempts": 1},
+        }
+        dry_result = execute_local_run(
+            phase, run, Path(temporary) / "canonical-preflight-run", expected_manifest_sha256
+        )
+        if dry_result.get("status") != "completed" or len(dry_result.get("artifacts", [])) != 1:
+            raise RunnerError("Phase B canonical executor/artifact promotion preflight failed")
     return {
         "status": "passed",
         "manifest_sha256": STAGE_B_MANIFEST_SHA256,
@@ -617,6 +639,8 @@ def authentic_world_long_horizon_stage_b_preflight(
         "latent_dim": LATENT_DIM,
         "prompt_binding": prompt,
         "dynamic_32d_six_arm_seam": control_seam,
+        "executor_precreated_empty_work_root": True,
+        "canonical_artifact_promotion": True,
         "source_encoder_sha256": SOURCE_ENCODER_SHA256,
         "source_decoder_sha256": SOURCE_DECODER_SHA256,
         "base_weights_loaded": False,
