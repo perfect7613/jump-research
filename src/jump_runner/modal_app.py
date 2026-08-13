@@ -606,10 +606,10 @@ def authentic_world_long_horizon_stage_b_preflight(
     paired_z, paired_observation = _encode(encoder, pair["a"], "cpu")
     if tuple(paired_z.shape) != (1, LATENT_DIM) or paired_observation.sha256() != pair["a"]["encoder_input_sha256"]:
         raise RunnerError("Phase B matched-pair observation-only encoder path mismatch")
-    matched_pair_seam = matched_pair_cpu_generation_preflight(encoder, decoder, tokenizer)
     config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
     model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
     tokenizer = AutoTokenizer.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    matched_pair_seam = matched_pair_cpu_generation_preflight(encoder, decoder, tokenizer)
     prompt = assert_prompt_identity(tokenizer)
     hidden_size = int(config.text_config.hidden_size)
     projector = build_gated_residual_projector(hidden_size, latent_dim=LATENT_DIM)
