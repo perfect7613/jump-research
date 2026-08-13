@@ -11,9 +11,10 @@ import math
 from copy import deepcopy
 from typing import Any
 
-from jump_contracts.experiments import canonical_json, validate_experiment_plan
-
-from .safety import ALLOWED_BUILTINS, ALLOWED_IMPORTS, POLICY_SHA256, SafetyError, validate_simulation_source
+from .safety import (
+    ALLOWED_BUILTINS, ALLOWED_IMPORTS, FIXED_SANDBOX, POLICY_SHA256, SafetyError,
+    validate_simulation_source,
+)
 
 
 class _BoundedStdout(io.StringIO):
@@ -35,7 +36,7 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 def _execute_validated_source(source: str, plan_value: dict[str, Any]) -> dict[str, Any]:
     """Execute source after remote revalidation; never expose this as a host API."""
-    plan = validate_experiment_plan(plan_value)
+    plan = _validate_remote_plan(plan_value)
     encoded = source.encode("utf-8")
     sandbox = plan["sandbox"]
     if hashlib.sha256(encoded).hexdigest() != sandbox["source"]["sha256"] or len(encoded) != sandbox["source"]["byte_length"]:
@@ -52,6 +53,46 @@ def _execute_validated_source(source: str, plan_value: dict[str, Any]) -> dict[s
         exec(compile(tree, "<sealed-simulation>", "exec"), namespace, namespace)
         raw = namespace["simulate"](deepcopy(plan))
     return _validate_result(raw, plan, stdout.getvalue())
+
+
+def _canonical_json(value: Any) -> bytes:
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+    except (TypeError, ValueError) as exc:
+        raise SafetyError(f"plan/result is not canonical JSON: {exc}") from exc
+
+
+def _validate_remote_plan(value: Any) -> dict[str, Any]:
+    """Repeat identity, policy, and bounds checks without third-party packages."""
+    required = {
+        "schema_version", "plan_id", "intent", "hypothesis", "variables", "assumptions", "conditions",
+        "sampling", "prediction_before_run", "sandbox", "measurements", "comparisons", "plan_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise SafetyError("remote plan fields do not match ExperimentPlan v1")
+    plan = deepcopy(value)
+    if plan["schema_version"] != "jump.experiment-plan/v1":
+        raise SafetyError("remote plan schema version is unsupported")
+    preimage = {key: item for key, item in plan.items() if key not in {"plan_id", "plan_sha256"}}
+    digest = hashlib.sha256(_canonical_json(preimage)).hexdigest()
+    if plan["plan_sha256"] != digest or plan["plan_id"] != f"plan-{digest[:24]}":
+        raise SafetyError("remote plan identity does not match its content")
+    sandbox = plan["sandbox"]
+    if not isinstance(sandbox, dict) or set(sandbox) != {*FIXED_SANDBOX, "source"}:
+        raise SafetyError("remote sandbox declaration is invalid")
+    if {key: sandbox[key] for key in FIXED_SANDBOX} != FIXED_SANDBOX:
+        raise SafetyError("remote sandbox policy does not match the deployed policy")
+    if not isinstance(plan["conditions"], list) or not isinstance(plan["measurements"], list):
+        raise SafetyError("remote conditions and measurements must be arrays")
+    sampling = plan["sampling"]
+    if not isinstance(sampling, dict) or set(sampling) != {"seed", "repetitions", "design"}:
+        raise SafetyError("remote sampling declaration is invalid")
+    repetitions = sampling["repetitions"]
+    if not isinstance(repetitions, int) or isinstance(repetitions, bool) or not 1 <= repetitions <= 100:
+        raise SafetyError("remote repetition count is invalid")
+    if len(plan["conditions"]) * repetitions > sandbox["limits"]["max_rows"]:
+        raise SafetyError("remote design exceeds the row bound")
+    return plan
 
 
 def _validate_result(raw: Any, plan: dict[str, Any], stdout: str) -> dict[str, Any]:
@@ -98,7 +139,7 @@ def _validate_result(raw: Any, plan: dict[str, Any], stdout: str) -> dict[str, A
     if seen != expected:
         raise SafetyError("simulation must return one row per condition and repetition")
     result = {"measurements": normalized, "stdout": stdout}
-    if len(canonical_json(result)) > limits["result_bytes"]:
+    if len(_canonical_json(result)) > limits["result_bytes"]:
         raise SafetyError("simulation result exceeds the JSON byte limit")
     return result
 

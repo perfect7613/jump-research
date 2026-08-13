@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import modal
 
-from jump_contracts.experiments import canonical_json, validate_experiment_plan
+from .runtime import _execute_validated_source, _validate_remote_plan
 
-from .runtime import _execute_validated_source
-from .workflow import PreparedExecution
+if TYPE_CHECKING:
+    from .workflow import PreparedExecution
 
 app = modal.App("jump-general-experiment-workbench")
 image = modal.Image.debian_slim(python_version="3.11").add_local_dir("src", remote_path="/opt/jump/src")
@@ -34,8 +35,10 @@ def execute_restricted_simulation(
     prediction: dict[str, Any],
 ) -> dict[str, Any]:
     """Revalidate and execute one confirmed, predicted experiment in isolation."""
-    plan = validate_experiment_plan(plan_value)
-    prediction_sha = hashlib.sha256(canonical_json(prediction)).hexdigest()
+    plan = _validate_remote_plan(plan_value)
+    prediction_sha = hashlib.sha256(
+        json.dumps(prediction, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+    ).hexdigest()
     if confirmation != {
         "confirmed": True,
         "plan_sha256": plan["plan_sha256"],
@@ -45,7 +48,7 @@ def execute_restricted_simulation(
     return _execute_validated_source(source, plan)
 
 
-def execute_prepared_on_modal(prepared: PreparedExecution) -> dict[str, Any]:
+def execute_prepared_on_modal(prepared: "PreparedExecution") -> dict[str, Any]:
     """Spawn exactly one restricted CPU container and return its call identity."""
     if prepared.state != "prediction_ready":
         raise ValueError("prepared execution must be prediction_ready")

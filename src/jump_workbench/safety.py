@@ -4,20 +4,54 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 from copy import deepcopy
 from typing import Any
 
-from jump_contracts.experiments import FIXED_SANDBOX, RESTRICTED_POLICY, RESTRICTED_POLICY_SHA256
-
-MAX_SOURCE_BYTES = RESTRICTED_POLICY["source_bytes"]
-MAX_AST_NODES = RESTRICTED_POLICY["ast_nodes"]
-ALLOWED_IMPORTS = tuple(RESTRICTED_POLICY["allowed_imports"])
-ALLOWED_BUILTINS = tuple(RESTRICTED_POLICY["allowed_builtins"])
-ALLOWED_ATTRIBUTES = tuple(RESTRICTED_POLICY["allowed_attributes"])
-BANNED_NAMES = tuple(RESTRICTED_POLICY["banned_names"])
-BANNED_MODULES = tuple(RESTRICTED_POLICY["banned_modules"])
-POLICY = RESTRICTED_POLICY
-POLICY_SHA256 = RESTRICTED_POLICY_SHA256
+MAX_SOURCE_BYTES = 16_384
+MAX_AST_NODES = 1_200
+ALLOWED_IMPORTS = ("collections", "heapq", "math", "random", "statistics")
+ALLOWED_BUILTINS = (
+    "abs", "all", "any", "bool", "dict", "enumerate", "float", "int", "len", "list",
+    "max", "min", "print", "range", "round", "set", "sorted", "str", "sum", "tuple", "zip",
+)
+ALLOWED_ATTRIBUTES = (
+    "Counter", "Random", "append", "ceil", "choice", "choices", "copy", "cos", "count",
+    "exp", "expovariate", "extend", "floor", "gauss", "get", "heappop", "heappush", "index",
+    "isfinite", "items", "keys", "log", "mean", "median", "popleft", "pop", "pow", "pstdev",
+    "randint", "random", "randrange", "sample", "shuffle", "sin", "sort", "sqrt", "uniform",
+    "update", "values",
+)
+BANNED_NAMES = (
+    "breakpoint", "compile", "delattr", "eval", "exec", "getattr", "globals", "help", "input",
+    "locals", "memoryview", "open", "setattr", "type", "vars", "__import__",
+)
+BANNED_MODULES = (
+    "asyncio", "builtins", "ctypes", "ftplib", "http", "importlib", "inspect", "marshal",
+    "multiprocessing", "os", "pathlib", "pickle", "pip", "requests", "shelve", "shutil", "socket",
+    "subprocess", "sys", "tempfile", "threading", "urllib",
+)
+POLICY = {
+    "schema_version": "jump.restricted-python-policy/v1", "entrypoint": "simulate",
+    "source_bytes": MAX_SOURCE_BYTES, "ast_nodes": MAX_AST_NODES,
+    "allowed_imports": list(ALLOWED_IMPORTS), "allowed_builtins": list(ALLOWED_BUILTINS),
+    "allowed_attributes": list(ALLOWED_ATTRIBUTES), "banned_names": list(BANNED_NAMES),
+    "banned_modules": list(BANNED_MODULES), "filesystem": False, "network": False,
+    "subprocesses": False, "dynamic_code": False,
+}
+POLICY_SHA256 = hashlib.sha256(json.dumps(POLICY, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+DEPENDENCY_LOCK_SHA256 = hashlib.sha256(
+    json.dumps({"python": "3.11", "distributions": []}, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+FIXED_SANDBOX = {
+    "adapter_id": "modal.restricted-python-simulation/v1",
+    "policy_sha256": POLICY_SHA256,
+    "python": {"version": "3.11", "dependency_lock_sha256": DEPENDENCY_LOCK_SHA256},
+    "limits": {"cpu_cores": 1.0, "memory_mb": 512, "timeout_seconds": 30, "stdout_bytes": 8192,
+               "result_bytes": 65536, "max_rows": 200, "max_columns": 20},
+    "capabilities": {"network": False, "modal_access": False, "single_use": True, "secrets": [],
+                     "volumes": [], "filesystem": False, "subprocesses": False},
+}
 
 
 class SafetyError(ValueError):
