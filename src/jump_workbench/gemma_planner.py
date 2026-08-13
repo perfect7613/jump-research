@@ -31,8 +31,7 @@ def generate_with_frozen_gemma(
     if action == "visual_spec":
         result = _generate_json(_RUNTIME, _visual_spec_prompt(payload), max_new_tokens=3200, deterministic=True)
     elif action == "visual_predict":
-        result = _generate_json(_RUNTIME, _visual_prediction_prompt(payload), max_new_tokens=320, deterministic=True)
-        result = _normalize_visual_prediction(result)
+        result = _generate_visual_prediction(_RUNTIME, payload)
     elif action == "visual_review":
         result = _generate_json(_RUNTIME, _visual_review_prompt(payload), max_new_tokens=320, deterministic=True)
         result = _validate_visual_review(result)
@@ -90,6 +89,7 @@ def _generate_json(
     *,
     max_new_tokens: int,
     deterministic: bool = False,
+    strict_single_object: bool = False,
 ) -> dict[str, Any]:
     import torch
 
@@ -118,25 +118,82 @@ def _generate_json(
     with torch.inference_mode():
         output = model.generate(**generation)
     text = tokenizer.decode(output[0, input_ids.shape[1] :], skip_special_tokens=True)
-    return _extract_json_object(text)
+    return _extract_json_object(text, strict_single_object=strict_single_object)
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
+def _extract_json_object(
+    text: str,
+    *,
+    strict_single_object: bool = False,
+) -> dict[str, Any]:
     if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_JSON_BYTES:
         raise ValueError("model response exceeds the JSON byte limit")
     decoder = json.JSONDecoder()
-    for index, character in enumerate(text):
-        if character != "{":
-            continue
+    objects: list[tuple[int, int, dict[str, Any]]] = []
+    index = 0
+    while index < len(text):
+        start = text.find("{", index)
+        if start < 0:
+            break
         try:
-            value, end = decoder.raw_decode(text[index:])
+            value, length = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
+            index = start + 1
             continue
         if not isinstance(value, dict):
             raise ValueError("model JSON response must be an object")
         json.dumps(value, allow_nan=False)
-        return value
-    raise ValueError(f"model did not return one complete parseable JSON object (chars={len(text)}, tail={text[-300:]!r})")
+        end = start + length
+        if not strict_single_object:
+            return value
+        objects.append((start, end, value))
+        index = end
+    if not objects:
+        raise ValueError(f"model did not return one complete parseable JSON object (chars={len(text)})")
+    if len(objects) != 1:
+        raise ValueError("model response must contain exactly one JSON object")
+    start, end, value = objects[0]
+    if text[:start].strip() or text[end:].strip():
+        raise ValueError("model response contains text outside its single JSON object")
+    return value
+
+
+def _generate_visual_prediction(runtime: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate one closed prediction, with one sealed-spec-only repair attempt."""
+    try:
+        candidate = _generate_json(
+            runtime,
+            _visual_prediction_prompt(payload),
+            max_new_tokens=320,
+            deterministic=True,
+            strict_single_object=True,
+        )
+        return _validate_visual_prediction_candidate(candidate, payload)
+    except (TypeError, ValueError):
+        repaired = _generate_json(
+            runtime,
+            _visual_prediction_repair_prompt(payload),
+            max_new_tokens=240,
+            deterministic=True,
+            strict_single_object=True,
+        )
+        return _validate_visual_prediction_candidate(repaired, payload)
+
+
+def _validate_visual_prediction_candidate(
+    value: Any,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    prediction = _normalize_visual_prediction(value)
+    spec = payload.get("spec")
+    if not isinstance(spec, dict) or not isinstance(spec.get("measurements"), list):
+        raise ValueError("visual prediction requires a sealed spec with measurements")
+    measurement_ids = {
+        item.get("id") for item in spec["measurements"] if isinstance(item, dict)
+    }
+    if prediction["measurement_id"] not in measurement_ids:
+        raise ValueError("visual prediction measurement_id is not declared by the sealed spec")
+    return prediction
 
 
 def _generate_review(runtime: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -262,6 +319,13 @@ def _visual_prediction_prompt(payload: dict[str, Any]) -> str:
     return f"""Before execution, predict the primary measured direction for this sealed declarative toy experiment:
 {spec}
 Return exactly {{"summary":"1..500 characters grounded only in the spec","expected_direction":"increase"|"decrease"|"change"|"no_change","measurement_id":"one declared measurement id"}}. Do not claim measured results or real-world validity. No markdown."""
+
+
+def _visual_prediction_repair_prompt(payload: dict[str, Any]) -> str:
+    spec = json.dumps(payload.get("spec"), sort_keys=True, ensure_ascii=False)
+    return f"""Your previous visual prediction did not satisfy the closed response schema. Repair it using only this sealed declarative experiment spec:
+{spec}
+Return exactly one JSON object and no other text: {{"summary":"1..500 characters grounded only in the spec","expected_direction":"increase"|"decrease"|"change"|"no_change","measurement_id":"one measurement id declared in the spec"}}. Do not add markdown, analysis, a second object, measured results, or real-world claims."""
 
 
 def _visual_review_prompt(payload: dict[str, Any]) -> str:

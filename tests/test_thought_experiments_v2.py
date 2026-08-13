@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,8 @@ from jump_workbench.gemma_planner import (
     BASE_REPO_ID,
     BASE_REVISION,
     TRANSFORMERS_REVISION,
+    _extract_json_object,
+    _generate_visual_prediction,
     _normalize_visual_prediction,
     _validate_visual_review,
 )
@@ -300,3 +303,51 @@ def test_visual_model_narratives_reject_overlong_output_instead_of_truncating():
             "disposition": "retain",
             "interpretation": "x" * 501,
         })
+
+
+def test_visual_prediction_rejects_duplicate_or_trailing_json_and_repairs_once(monkeypatch):
+    valid = {
+        "summary": "Reversing the force should change mean speed.",
+        "expected_direction": "change",
+        "measurement_id": "mean_speed",
+    }
+    encoded = json.dumps(valid)
+    with pytest.raises(ValueError, match="exactly one JSON object"):
+        _extract_json_object(f"{encoded} thought {encoded}", strict_single_object=True)
+    with pytest.raises(ValueError, match="text outside"):
+        _extract_json_object(f"{encoded} thought", strict_single_object=True)
+
+    from jump_workbench import gemma_planner
+
+    prompts = []
+    responses = iter([ValueError("duplicate model output"), valid])
+
+    def fake_generate(
+        _runtime,
+        prompt,
+        *,
+        max_new_tokens,
+        deterministic=False,
+        strict_single_object=False,
+    ):
+        prompts.append((prompt, max_new_tokens, deterministic, strict_single_object))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(gemma_planner, "_generate_json", fake_generate)
+    prediction = _generate_visual_prediction({}, {"spec": built_spec()})
+    assert prediction == valid
+    assert len(prompts) == 2
+    assert prompts[0][1:] == (320, True, True)
+    assert prompts[1][1:] == (240, True, True)
+    assert "mean_speed" in prompts[1][0]
+    assert "duplicate model output" not in prompts[1][0]
+
+    responses = iter([
+        ValueError("duplicate model output"),
+        {**valid, "measurement_id": "undeclared_measurement"},
+    ])
+    with pytest.raises(ValueError, match="not declared"):
+        _generate_visual_prediction({}, {"spec": built_spec()})
