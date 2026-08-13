@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+import urllib.error
 
 import pytest
 
@@ -70,7 +72,7 @@ def question(intent: str) -> dict:
     }
 
 
-@pytest.mark.parametrize("intent", EXAMPLES[1:])
+@pytest.mark.parametrize("intent", EXAMPLES[:2])
 def test_client_sends_only_exact_question_then_exact_confirmation(monkeypatch, intent):
     plan_response, run_response = responses_for(intent)
     responses = iter((plan_response, run_response))
@@ -118,6 +120,21 @@ def test_client_has_no_unconfigured_fallback(monkeypatch):
     monkeypatch.delenv("JUMP_MODAL_TOKEN", raising=False)
     with pytest.raises(GeneralCoordinatorError, match="No result was substituted"):
         GeneralCoordinatorClient.from_environment()
+
+
+def test_unsupported_coordinator_detail_is_shown_without_fallback(monkeypatch):
+    def reject(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://coordinator.invalid/v1/experiments/plan",
+            400,
+            "Bad Request",
+            {},
+            BytesIO(json.dumps({"detail": "unsupported experiment: no supported template"}).encode()),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", reject)
+    with pytest.raises(GeneralCoordinatorError, match="unsupported experiment: no supported template"):
+        GeneralCoordinatorClient("https://coordinator.invalid", "secret").plan(question(EXAMPLES[0]))
 
 
 def test_environment_client_uses_only_reviewed_endpoint_and_server_token(monkeypatch):
