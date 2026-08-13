@@ -561,6 +561,116 @@ def authentic_world_long_horizon(
         return result
 
 
+@app.function(
+    image=stage_d_image,
+    timeout=300,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_long_horizon_stage_b_preflight",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_stage_b_preflight(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+) -> dict[str, Any]:
+    """CPU/config-only Phase-B preflight; never loads base weights or allocates GPU."""
+    import hashlib
+    from transformers import AutoConfig, AutoModelForMultimodalLM, AutoTokenizer
+    from jump_benchmark.authentic import build_gated_residual_projector
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION, assert_prompt_identity
+    from jump_benchmark.long_horizon import LATENT_DIM, build_long_horizon_modules
+    from jump_benchmark.long_horizon_stage_b import (
+        SOURCE_DECODER_SHA256,
+        SOURCE_ENCODER_SHA256,
+        SOURCE_RELATIVE_ROOT,
+        STAGE_B_MANIFEST_SHA256,
+    )
+    from safetensors.torch import load_file
+
+    if expected_manifest_sha256 != STAGE_B_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Phase B preflight identity mismatch")
+    source = VOLUME_PATH / SOURCE_RELATIVE_ROOT
+    encoder_path, decoder_path = source / "encoder.safetensors", source / "decoder.safetensors"
+    if hashlib.sha256(encoder_path.read_bytes()).hexdigest() != SOURCE_ENCODER_SHA256 or hashlib.sha256(decoder_path.read_bytes()).hexdigest() != SOURCE_DECODER_SHA256:
+        raise RunnerError("Phase B preflight source checksum mismatch")
+    encoder, decoder = build_long_horizon_modules()
+    encoder.load_state_dict(load_file(encoder_path), strict=True)
+    decoder.load_state_dict(load_file(decoder_path), strict=True)
+    config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
+    tokenizer = AutoTokenizer.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    prompt = assert_prompt_identity(tokenizer)
+    hidden_size = int(config.text_config.hidden_size)
+    projector = build_gated_residual_projector(hidden_size, latent_dim=LATENT_DIM)
+    if projector.projector.weight.shape != (hidden_size, LATENT_DIM):
+        raise RunnerError("Phase B projector shape mismatch")
+    return {
+        "status": "passed",
+        "manifest_sha256": STAGE_B_MANIFEST_SHA256,
+        "code_sha": CODE_VERSION,
+        "model_type": config.model_type,
+        "model_class": model_class.__name__,
+        "hidden_size": hidden_size,
+        "latent_dim": LATENT_DIM,
+        "prompt_binding": prompt,
+        "source_encoder_sha256": SOURCE_ENCODER_SHA256,
+        "source_decoder_sha256": SOURCE_DECODER_SHA256,
+        "base_weights_loaded": False,
+        "gpu_allocated": False,
+        "persistent_root_created": False,
+    }
+
+
+def _authorize_long_horizon_stage_b(
+    *, expected_manifest_sha256: str, expected_code_sha: str,
+    confirm_paid: bool, confirm_h100: bool,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon_stage_b import STAGE_B_MANIFEST_SHA256, stage_b_manifest
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("Phase B requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != STAGE_B_MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("Phase B immutable identity mismatch")
+    execution = stage_b_manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if forecast != execution["forecast_usd"] or forecast > execution["aggregate_authority_ceiling_usd"]:
+        raise RunnerError("Phase B spend contract mismatch")
+    return execution
+
+
+@app.function(
+    image=stage_d_image,
+    gpu="H100",
+    timeout=7200,
+    max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="authentic_world_long_horizon_stage_b",
+)
+@modal.concurrent(max_inputs=1)
+def authentic_world_long_horizon_stage_b(
+    expected_manifest_sha256: str,
+    expected_code_sha: str,
+    confirm_paid: bool = False,
+    confirm_h100: bool = False,
+) -> dict[str, Any]:
+    from jump_benchmark.long_horizon_stage_b import run_contract
+    _authorize_long_horizon_stage_b(
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_code_sha=expected_code_sha,
+        confirm_paid=confirm_paid,
+        confirm_h100=confirm_h100,
+    )
+    root = VOLUME_PATH / "authentic-world-long-horizon-stage-b" / expected_manifest_sha256 / "run"
+    phase, run = run_contract(expected_manifest_sha256, expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256)
+        volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"Phase B failed: {result.get('error')}")
+        return result
+
+
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
     mode: str,
