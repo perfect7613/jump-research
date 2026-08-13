@@ -134,6 +134,30 @@ def test_mismatched_decoder_or_injection_bytes_fail_closed():
         build_learned_latent_evidence(**(kwargs | {"injection_input": changed}))
 
 
+@pytest.mark.parametrize("media_type", [None, 7, "application/octet-stream"])
+def test_decoded_image_media_type_failures_use_evidence_error(media_type):
+    raw = _z()
+    with pytest.raises(EvidenceError, match="decoded image media type must be image"):
+        build_learned_latent_evidence(
+            encoder_output=raw,
+            decoder_input=raw,
+            injection_input=raw,
+            encoder_observation=b"observation",
+            encoder_observation_artifact_name="observation.bin",
+            encoder_observation_media_type="application/octet-stream",
+            dtype="float32-le",
+            shape=[1, 4],
+            order="C",
+            tensor_artifact_name="world-latent.bin",
+            recipient_world_id="world-b",
+            world_pair_id="pair-a-b",
+            learned_decoder=_decoder(),
+            decoded_image=b"image",
+            decoded_image_media_type=media_type,
+            answer={"adequate": False},
+        )
+
+
 def test_donor_swap_lineage_is_literal_and_distinct():
     evidence = _evidence(donor="world-a")
     assert evidence["swap_lineage"] == {

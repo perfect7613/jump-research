@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import jump_contracts.evidence as evidence_module
+
 from jump_contracts.evidence import (
     EvidenceError,
     artifact_declaration,
@@ -74,6 +76,41 @@ def test_task_evidence_rechecks_hash_and_preregistered_dimensions(tmp_path):
         load_task_evidence(
             output / "result.json", allowed_layers=[9], allowed_timepoints=["T4"]
         )
+
+
+@pytest.mark.parametrize("field", [{"path": Path("not-json")}, {"value": float("nan")}])
+def test_task_evidence_wraps_noncanonical_domain_fields(tmp_path, field):
+    output = tmp_path / "work"
+    output.mkdir()
+    with pytest.raises(EvidenceError, match="task evidence must be finite canonical JSON"):
+        write_task_evidence(output, metrics=[_metric()], domain=field)
+
+
+def test_promotion_rejects_file_that_appears_after_coverage_validation(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    artifact = work / "answer.json"
+    artifact.write_text("{}")
+    task = write_task_evidence(
+        work,
+        metrics=[_metric()],
+        artifacts=[artifact_declaration(artifact, work)],
+    )
+    real_artifact_files = evidence_module._artifact_files
+    calls = 0
+
+    def changing_artifact_files(root):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (root / "appeared-late.bin").write_bytes(b"late")
+        return real_artifact_files(root)
+
+    monkeypatch.setattr(evidence_module, "_artifact_files", changing_artifact_files)
+    target = tmp_path / "promoted"
+    with pytest.raises(EvidenceError, match="undeclared artifact appeared during promotion"):
+        promote_task_artifacts(work, target, "attempts/0001/artifacts", task)
+    assert not target.exists()
 
 
 def test_promotion_preserves_metadata_and_verified_reader_detects_tampering(tmp_path):

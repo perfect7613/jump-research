@@ -280,13 +280,14 @@ def execute_local_run(
         status = "failed"
         error = f"{type(exc).__name__}: {exc}"
         task_result = {"metrics": []}
-        artifacts = (
-            promote_task_artifacts(
-                work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts"
-            )
-            if not (attempt / "artifacts").exists()
-            else []
-        )
+        artifacts = []
+        if not (attempt / "artifacts").exists():
+            try:
+                artifacts = promote_task_artifacts(
+                    work_dir, attempt / "artifacts", f"attempts/{number:04d}/artifacts"
+                )
+            except Exception as promotion_exc:
+                error = f"{error}; artifact promotion failed: {type(promotion_exc).__name__}"
 
     result = {
         "schema_version": "jump.run-result/v1",

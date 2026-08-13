@@ -8,12 +8,17 @@ It intentionally contains no simulator, model, or UI implementation.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .evidence import EvidenceError, seal_result_envelope
+from .evidence import (
+    EvidenceError,
+    canonical_json,
+    is_sha256,
+    normalize_json_object,
+    seal_result_envelope,
+)
 
 
 LATENT_EVIDENCE_VERSION = "jump.learned-latent-evidence/v1"
@@ -46,7 +51,7 @@ def tensor_bytes_sha256(
     and the raw bytes. Prompt strings and rendered values are never inputs.
     """
     content, descriptor = _tensor_input(raw, dtype=dtype, shape=shape, order=order)
-    return hashlib.sha256(_canonical_json(descriptor) + b"\0" + content).hexdigest()
+    return hashlib.sha256(canonical_json(descriptor) + b"\0" + content).hexdigest()
 
 
 def learned_decoder_identity(
@@ -115,9 +120,11 @@ def build_learned_latent_evidence(
     decoder = dict(learned_decoder)
     _validate_decoder_identity(decoder)
     image_bytes = _bytes(decoded_image, "decoded image")
-    if not decoded_image_media_type.startswith("image/"):
+    if not isinstance(decoded_image_media_type, str) or not decoded_image_media_type.startswith(
+        "image/"
+    ):
         raise EvidenceError("decoded image media type must be image/*")
-    normalized_answer = _json_object(answer, "answer")
+    normalized_answer = normalize_json_object(answer, "answer")
     observation_bytes = _bytes(encoder_observation, "encoder observation")
     if not encoder_observation_artifact_name:
         raise EvidenceError("encoder observation artifact name must be nonempty")
@@ -157,7 +164,7 @@ def build_learned_latent_evidence(
         },
         "answer": normalized_answer,
         "answer_binding": {
-            "answer_sha256": hashlib.sha256(_canonical_json(normalized_answer)).hexdigest(),
+            "answer_sha256": hashlib.sha256(canonical_json(normalized_answer)).hexdigest(),
             "world_latent_sha256": world_hash,
             "injection_input_sha256": injection_hash,
         },
@@ -166,8 +173,13 @@ def build_learned_latent_evidence(
 
 
 def validate_learned_latent_evidence(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate a serialized latent record before decoding, caching, or display."""
-    evidence = _json_object(value, "learned latent evidence")
+    """Validate latent metadata before decoding, caching, or display.
+
+    This validates the serialized record, not separately transported tensor
+    bytes. Call :func:`verify_latent_tensor_bytes` with the declared dtype,
+    shape, and order before interpreting or caching any raw tensor artifact.
+    """
+    evidence = normalize_json_object(value, "learned latent evidence")
     required = {
         "schema_version",
         "encoder_input",
@@ -198,7 +210,7 @@ def validate_learned_latent_evidence(value: Mapping[str, Any]) -> dict[str, Any]
     for key in ("artifact_name", "media_type"):
         if not isinstance(encoder_input[key], str) or not encoder_input[key]:
             raise EvidenceError(f"encoder input {key} must be a nonempty string")
-    if not _is_sha256(encoder_input["observation_sha256"]):
+    if not is_sha256(encoder_input["observation_sha256"]):
         raise EvidenceError("encoder input observation_sha256 must be a SHA-256")
     if encoder_input["ground_truth_fields_present"] is not False:
         raise EvidenceError("world encoder input must not contain ground-truth fields")
@@ -222,7 +234,7 @@ def validate_learned_latent_evidence(value: Mapping[str, Any]) -> dict[str, Any]
     _validate_tensor_descriptor(tensor)
     if not isinstance(tensor["artifact_name"], str) or not tensor["artifact_name"]:
         raise EvidenceError("latent tensor artifact_name must be a nonempty string")
-    if not _is_sha256(tensor["raw_bytes_sha256"]):
+    if not is_sha256(tensor["raw_bytes_sha256"]):
         raise EvidenceError("latent tensor raw_bytes_sha256 must be a SHA-256")
     hashes = [
         tensor[name]
@@ -233,7 +245,7 @@ def validate_learned_latent_evidence(value: Mapping[str, Any]) -> dict[str, Any]
             "injection_input_sha256",
         )
     ]
-    if any(not _is_sha256(digest) for digest in hashes) or len(set(hashes)) != 1:
+    if any(not is_sha256(digest) for digest in hashes) or len(set(hashes)) != 1:
         raise EvidenceError(
             "world_latent_sha256, encoder_output_sha256, decoder_input_sha256, "
             "and injection_input_sha256 must be identical SHA-256 digests"
@@ -262,19 +274,19 @@ def validate_learned_latent_evidence(value: Mapping[str, Any]) -> dict[str, Any]
         "image/"
     ):
         raise EvidenceError("decoded observation media type must be image/*")
-    if not _is_sha256(observation["image_sha256"]):
+    if not is_sha256(observation["image_sha256"]):
         raise EvidenceError("decoded observation image_sha256 must be a SHA-256")
     if observation["world_latent_sha256"] != tensor["world_latent_sha256"]:
         raise EvidenceError("decoded observation is not bound to the world latent")
     if observation["decoder_artifact_sha256"] != evidence["learned_decoder"]["artifact_sha256"]:
         raise EvidenceError("decoded observation is not bound to the learned decoder artifact")
 
-    answer = _json_object(evidence["answer"], "answer")
+    answer = normalize_json_object(evidence["answer"], "answer")
     binding = evidence["answer_binding"]
     binding_fields = {"answer_sha256", "world_latent_sha256", "injection_input_sha256"}
     if not isinstance(binding, dict) or set(binding) != binding_fields:
         raise EvidenceError(f"answer binding must contain exactly {sorted(binding_fields)}")
-    expected_answer = hashlib.sha256(_canonical_json(answer)).hexdigest()
+    expected_answer = hashlib.sha256(canonical_json(answer)).hexdigest()
     if binding["answer_sha256"] != expected_answer:
         raise EvidenceError("answer hash does not match the bound answer")
     if binding["world_latent_sha256"] != tensor["world_latent_sha256"]:
@@ -463,7 +475,7 @@ def _validate_decoder_identity(value: Any) -> None:
         if not isinstance(value[key], str) or not value[key]:
             raise EvidenceError(f"learned decoder {key} must be a nonempty string")
     for key in ("artifact_sha256", "training_manifest_sha256"):
-        if not _is_sha256(value[key]):
+        if not is_sha256(value[key]):
             raise EvidenceError(f"learned decoder {key} must be a SHA-256")
 
 
@@ -471,33 +483,3 @@ def _bytes(value: bytes | bytearray | memoryview, where: str) -> bytes:
     if not isinstance(value, (bytes, bytearray, memoryview)):
         raise EvidenceError(f"{where} must be raw bytes")
     return bytes(value)
-
-
-def _json_object(value: Mapping[str, Any], where: str) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise EvidenceError(f"{where} must be an object")
-    try:
-        normalized = json.loads(_canonical_json(dict(value)))
-    except (TypeError, ValueError) as exc:
-        raise EvidenceError(f"{where} must be finite canonical JSON: {exc}") from exc
-    if not isinstance(normalized, dict):
-        raise EvidenceError(f"{where} must be an object")
-    return normalized
-
-
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def _is_sha256(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
-    )

@@ -89,9 +89,10 @@ def write_task_evidence(
         "artifacts": [dict(artifact) for artifact in artifacts],
         **fields,
     }
+    result = normalize_json_object(result, "task evidence")
     _validate_metrics(result["metrics"])
     _validate_declared_artifacts(root, result["artifacts"], require_exact_coverage=True)
-    _write_immutable(root / "result.json", _canonical_json(result) + b"\n")
+    _write_immutable(root / "result.json", canonical_json(result) + b"\n")
     return result
 
 
@@ -157,6 +158,10 @@ def promote_task_artifacts(
                     "media_type": "application/octet-stream",
                 }
             else:
+                if relative not in declared:
+                    raise EvidenceError(
+                        f"undeclared artifact appeared during promotion: {relative}"
+                    )
                 record = dict(declared[relative])
                 if sha256_file(target) != record["sha256"]:
                     raise EvidenceError(f"artifact changed while being promoted: {relative}")
@@ -192,7 +197,7 @@ def load_verified_run_evidence(
     if not isinstance(provenance, dict):
         raise EvidenceError("run evidence requires provenance")
     manifest_sha = provenance.get("manifest_sha256")
-    if not _is_sha256(manifest_sha):
+    if not is_sha256(manifest_sha):
         raise EvidenceError("provenance.manifest_sha256 must be a lowercase SHA-256")
     if expected_manifest_sha256 is not None and manifest_sha != expected_manifest_sha256:
         raise EvidenceError("run evidence does not match the expected manifest")
@@ -222,16 +227,8 @@ def read_verified_artifact(
         artifact_root=artifact_root,
         expected_manifest_sha256=expected_manifest_sha256,
     )
-    matches = [record for record in result["artifacts"] if record["name"] == name]
-    if len(matches) != 1:
-        raise EvidenceError(f"artifact name must select exactly one record: {name!r}")
-    record = matches[0]
     root = Path(artifact_root) if artifact_root is not None else result_path.parent
-    source = _safe_artifact(root, record["path"])
-    content = source.read_bytes()
-    if hashlib.sha256(content).hexdigest() != record["sha256"]:
-        raise EvidenceError(f"artifact hash mismatch while reading: {record['path']}")
-    return dict(record), content
+    return _select_and_read(result, name, root)
 
 
 def load_cached_result_envelope(
@@ -249,17 +246,10 @@ def load_cached_result_envelope(
         artifact_root=artifact_root,
         expected_manifest_sha256=expected_manifest_sha256,
     )
-    matches = [record for record in result["artifacts"] if record["name"] == name]
-    if len(matches) != 1:
-        raise EvidenceError(f"artifact name must select exactly one record: {name!r}")
-    record = matches[0]
+    root = Path(artifact_root) if artifact_root is not None else result_path.parent
+    record, content = _select_and_read(result, name, root)
     if record["media_type"] not in {"application/json", "application/vnd.api+json"}:
         raise EvidenceError("cached result artifact must declare a JSON media type")
-    root = Path(artifact_root) if artifact_root is not None else result_path.parent
-    source = _safe_artifact(root, record["path"])
-    content = source.read_bytes()
-    if hashlib.sha256(content).hexdigest() != record["sha256"]:
-        raise EvidenceError(f"artifact hash mismatch while reading: {record['path']}")
     try:
         payload = json.loads(content)
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -284,18 +274,21 @@ def seal_result_envelope(
     code_version: str,
     checkpoint_id: str,
 ) -> dict[str, Any]:
-    """Seal one JSON result for identical cached and live consumption.
+    """Content-address one JSON result for cached and live consumption.
 
     The payload owns domain invariants such as latent/decoder equality and
-    answer/image hashes. This outer envelope binds those bytes to an execution
-    source and immutable manifest, run, code, and checkpoint identities.
+    answer/image hashes. This outer envelope detects accidental drift,
+    truncation, and cached/live mismatches by binding those bytes to execution
+    identities. It does not authenticate authorship or prevent a writer from
+    recomputing the hash; trust-boundary authentication requires a signature or
+    MAC outside this interface.
     """
-    normalized_payload = _normalize_json_object(payload, "sealed result payload")
+    normalized_payload = normalize_json_object(payload, "sealed result payload")
     envelope = {
         "schema_version": SEALED_RESULT_VERSION,
         "source": source,
         "payload": normalized_payload,
-        "payload_sha256": _sha256_bytes(_canonical_json(normalized_payload)),
+        "payload_sha256": _sha256_bytes(canonical_json(normalized_payload)),
         "provenance": {
             "manifest_sha256": manifest_sha256,
             "run_id": run_id,
@@ -359,7 +352,7 @@ def _validate_metrics(
 
 
 def _verify_result_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
-    value = _normalize_json_object(envelope, "sealed result envelope")
+    value = normalize_json_object(envelope, "sealed result envelope")
     required = {"schema_version", "source", "payload", "payload_sha256", "provenance"}
     if set(value) != required:
         raise EvidenceError(f"sealed result envelope must contain exactly {sorted(required)}")
@@ -370,9 +363,9 @@ def _verify_result_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
     payload = value["payload"]
     if not isinstance(payload, dict):
         raise EvidenceError("sealed result payload must be an object")
-    if not _is_sha256(value["payload_sha256"]):
+    if not is_sha256(value["payload_sha256"]):
         raise EvidenceError("payload_sha256 must be a lowercase SHA-256")
-    if _sha256_bytes(_canonical_json(payload)) != value["payload_sha256"]:
+    if _sha256_bytes(canonical_json(payload)) != value["payload_sha256"]:
         raise EvidenceError("sealed result payload hash mismatch")
     provenance = value["provenance"]
     provenance_fields = {"manifest_sha256", "run_id", "code_version", "checkpoint_id"}
@@ -380,7 +373,7 @@ def _verify_result_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
         raise EvidenceError(
             f"sealed result provenance must contain exactly {sorted(provenance_fields)}"
         )
-    if not _is_sha256(provenance["manifest_sha256"]):
+    if not is_sha256(provenance["manifest_sha256"]):
         raise EvidenceError("sealed result manifest_sha256 must be a lowercase SHA-256")
     for key in ("run_id", "code_version", "checkpoint_id"):
         if not isinstance(provenance[key], str) or not provenance[key]:
@@ -425,7 +418,7 @@ def _validate_artifact_record(record: Any, *, where: str) -> None:
     if not isinstance(record["name"], str) or not record["name"]:
         raise EvidenceError(f"{where} name must be a nonempty string")
     _relative_artifact_path(record["path"])
-    if not _is_sha256(record["sha256"]):
+    if not is_sha256(record["sha256"]):
         raise EvidenceError(f"{where} sha256 must be a lowercase SHA-256")
     if not isinstance(record["media_type"], str) or not record["media_type"]:
         raise EvidenceError(f"{where} media_type must be a nonempty string")
@@ -482,11 +475,12 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def _normalize_json_object(value: Mapping[str, Any], where: str) -> dict[str, Any]:
+def normalize_json_object(value: Mapping[str, Any], where: str) -> dict[str, Any]:
+    """Return a finite, canonical-JSON copy of a mapping."""
     if not isinstance(value, Mapping):
         raise EvidenceError(f"{where} must be an object")
     try:
-        normalized = json.loads(_canonical_json(dict(value)))
+        normalized = json.loads(canonical_json(dict(value)))
     except (TypeError, ValueError) as exc:
         raise EvidenceError(f"{where} must be finite canonical JSON: {exc}") from exc
     if not isinstance(normalized, dict):  # defensive; the input is already a mapping
@@ -494,15 +488,21 @@ def _normalize_json_object(value: Mapping[str, Any], where: str) -> dict[str, An
     return normalized
 
 
-def _is_sha256(value: Any) -> bool:
-    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+def is_sha256(value: Any) -> bool:
+    """Return whether ``value`` is a lowercase hexadecimal SHA-256 digest."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _canonical_json(value: Any) -> bytes:
+def canonical_json(value: Any) -> bytes:
+    """Serialize finite JSON deterministically for hash preimages."""
     return json.dumps(
         value,
         sort_keys=True,
@@ -530,3 +530,17 @@ def _write_immutable(path: Path, content: bytes) -> None:
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _select_and_read(
+    result: Mapping[str, Any], name: str, root: Path
+) -> tuple[dict[str, Any], bytes]:
+    matches = [record for record in result["artifacts"] if record["name"] == name]
+    if len(matches) != 1:
+        raise EvidenceError(f"artifact name must select exactly one record: {name!r}")
+    record = matches[0]
+    source = _safe_artifact(root, record["path"])
+    content = source.read_bytes()
+    if hashlib.sha256(content).hexdigest() != record["sha256"]:
+        raise EvidenceError(f"artifact hash mismatch while reading: {record['path']}")
+    return dict(record), content

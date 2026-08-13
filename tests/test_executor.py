@@ -96,6 +96,31 @@ def test_incomplete_attempt_consumes_max_attempt_budget(manifest, tmp_path):
     assert not (run_dir / "attempts/0002").exists()
 
 
+def test_promotion_failure_is_recorded_even_when_cleanup_promotion_also_fails(
+    manifest, tmp_path, monkeypatch
+):
+    import jump_runner.executor as executor
+    from jump_runner.manifest import resolve_run
+
+    def fail_promotion(*_args, **_kwargs):
+        raise RuntimeError("promotion unavailable")
+
+    monkeypatch.setattr(executor, "promote_task_artifacts", fail_promotion)
+    phase = dict(manifest["phases"][0])
+    phase["_preregistration"] = manifest["preregistration"]
+    phase["_secret_keys"] = []
+    resolved = resolve_run(manifest["defaults"], manifest["phases"][0]["runs"][0])
+    run_dir = tmp_path / "promotion-failure"
+
+    result = executor.execute_local_run(phase, resolved, run_dir, "a" * 64)
+
+    assert result["status"] == "failed"
+    assert result["artifacts"] == []
+    assert "RuntimeError: promotion unavailable" in result["error"]
+    assert "artifact promotion failed: RuntimeError" in result["error"]
+    assert json.loads((run_dir / "result.json").read_text()) == result
+
+
 @pytest.mark.parametrize("secret", ["abc", "sk-super-secret-value"])
 def test_logs_redact_every_declared_value_length(manifest, tmp_path, monkeypatch, secret):
     monkeypatch.setenv("X", secret)
