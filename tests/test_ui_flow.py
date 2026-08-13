@@ -26,7 +26,7 @@ def test_plan_confirmation_and_scope_rejection():
     assert run["status"] == "planned" and run["result"] is None
     html = plan_html(run)
     assert "Here’s the experiment I understood" in html
-    assert all(label in html for label in ("World", "Observe", "Change", "Predict"))
+    assert all(label in html for label in ("Dots", "Watch", "Change", "Guess"))
     assert "Make matching objects" not in html  # raw intent is absent from the plan
     with pytest.raises(ExperimentFlowError, match="URLs|URI"):
         plan_experiment("Open https://example.com and run it", session_id="test-session")
@@ -34,7 +34,7 @@ def test_plan_confirmation_and_scope_rejection():
 
 def test_app_exposes_one_run_then_mandatory_confirmation():
     gr = pytest.importorskip("gradio")
-    from jump_ui.app import QUESTION, create_app
+    from jump_ui.app import EXAMPLES, QUESTION, create_app
 
     demo = create_app(backend=NonLiveContractFixtureBackend(), enable_queue=False)
     assert isinstance(demo, gr.Blocks)
@@ -42,6 +42,12 @@ def test_app_exposes_one_run_then_mandatory_confirmation():
     config = demo.get_config_file()
     labels = {component.get("props", {}).get("label") for component in config["components"]}
     assert QUESTION in labels
+    assert QUESTION == "What should the dots do differently?"
+    assert EXAMPLES == (
+        "Make matching dots push apart.",
+        "Swap the hidden groups between two scenes.",
+        "Check whether the old rule is wrong.",
+    )
     values = {component.get("props", {}).get("value") for component in config["components"]}
     assert {"Run experiment", "Run this plan"} <= values
     dependencies = {dependency.get("api_name") for dependency in config["dependencies"]}
@@ -71,8 +77,9 @@ def test_format_valid_and_exact_correct_are_separate_readouts():
             "notes": "Well formed, not exactly correct.",
         }
     )
-    assert "Answer format</span><strong class=\"good\">Yes" in html
-    assert "Exact answer</span><strong class=\"bad\">No" in html
+    assert "The answer was formatted correctly, but the model got the hidden rule wrong." in html
+    assert "Could we read the answer?</span><strong class=\"good\">Yes" in html
+    assert "Did it find the hidden rule?</span><strong class=\"bad\">No" in html
 
 
 def test_same_z_and_learned_decoder_image_provenance_gate_presentation():
@@ -87,8 +94,9 @@ def test_same_z_and_learned_decoder_image_provenance_gate_presentation():
         checked["evidence"]["decoded_observation"]["world_latent_sha256"],
     } == {tensor["world_latent_sha256"]}
     cards = result_sections(completed, backend_label="NON-LIVE CONTRACT FIXTURE")
-    assert "same learned world state" in cards[4]
-    assert "NON-LIVE CONTRACT FIXTURE" in cards[0]
+    assert "same saved experiment state" in cards[4]
+    assert "learned-z" not in "".join(cards).lower()
+    assert "stage d" not in "".join(cards).lower()
 
     tampered = copy.deepcopy(completed)
     tampered["result"]["decoded_image"]["data"] += "AAAA"

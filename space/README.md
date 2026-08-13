@@ -1,5 +1,5 @@
 ---
-title: JUMP — Six-object experiments
+title: JUMP — Hidden Rule Challenge
 emoji: ⚗️
 colorFrom: yellow
 colorTo: blue
@@ -10,11 +10,10 @@ pinned: false
 license: other
 ---
 
-# JUMP
+# Can an AI discover a hidden rule?
 
-Describe a bounded experiment in a synthetic six-object physics world, confirm
-the parsed plan, and run the authenticated engineering pipeline.
+Watch a few dots move. Some secretly belong together. Change how they push or
+pull, then see whether the AI can predict what happens.
 
-The current Stage D result is null: own-z equaled no-z and the donor shift was
-zero. The demo makes no informative-representation, behavioral, causal, or
-mechanistic claim.
+The demo runs end to end, but the current model is still learning the hidden
+rule. Technical evidence and limitations are shown inside the app.
