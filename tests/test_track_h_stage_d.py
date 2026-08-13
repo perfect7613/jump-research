@@ -56,4 +56,4 @@ def test_stage_d_minimal_injection_and_swap_contract():
     preflight = stage_d_cpu_preflight(tokenizer, hidden_size=8)
     assert preflight["status"] == "passed" and preflight["gpu_allocated"] is False
     assert stage_d_manifest()["claims"]["mechanistic"] is False
-    assert STAGE_D_MANIFEST_SHA256 == "c174f602e2a8df264839e0548224d4251f766400fe03faadfc1fcf296d03e182"
+    assert STAGE_D_MANIFEST_SHA256 == "09b6a0378af6073fd858ca2f1e86537771a96525d83e6f10e2f4813b63086406"
