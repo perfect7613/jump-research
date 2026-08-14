@@ -918,6 +918,8 @@ def _authorize_general_world_model(*, expected_manifest_sha256: str, expected_co
 def general_visual_world_model_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
     """CPU same-image dataset/schema/tiny-overfit and frozen-base config preflight."""
     import sys
+    import tempfile
+    from jump_contracts import load_task_evidence
     from transformers import AutoConfig, AutoModelForMultimodalLM
     from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION
     from jump_benchmark.general_world_model import MANIFEST_SHA256, cpu_preflight
@@ -925,11 +927,24 @@ def general_visual_world_model_preflight(expected_manifest_sha256: str, expected
         raise RunnerError("general world-model preflight identity mismatch")
     config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
     model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
+    with tempfile.TemporaryDirectory(prefix="general-world-task-") as temporary:
+        root = Path(temporary); output = root / "output"; checkpoint = root / "checkpoint"
+        output.mkdir(); checkpoint.mkdir(); parameters = root / "parameters.json"
+        parameters.write_text(json.dumps({"expected_manifest_sha256": MANIFEST_SHA256, "expected_code_sha": CODE_VERSION}))
+        env = dict(os.environ); env["JUMP_GENERAL_WORLD_MODEL_TASK_PREFLIGHT"] = "1"
+        completed = subprocess.run(
+            [sys.executable, "-m", "jump_benchmark.general_world_model_task", "--parameters", str(parameters), "--output-dir", str(output), "--checkpoint-dir", str(checkpoint)],
+            env=env, capture_output=True, text=True, timeout=300, check=False,
+        )
+        if completed.returncode != 0:
+            raise RunnerError(f"general world-model task preflight failed: {completed.stderr[-500:]}")
+        task_result = load_task_evidence(output / "result.json")
     return {
         "status": "passed", "manifest_sha256": MANIFEST_SHA256, "code_sha": CODE_VERSION,
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "model_type": config.model_type, "model_class": model_class.__name__, "base_weights_loaded": False,
         "gpu_allocated": False, "persistent_root_created": False, "seam": cpu_preflight(),
+        "task_subprocess_result_schema": task_result["schema_version"],
     }
 
 

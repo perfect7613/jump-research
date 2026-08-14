@@ -63,6 +63,16 @@ def manifest() -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": "general-declarative-visual-world-model-pilot-v1",
+        "execution_lineage": {
+            "state": "recovery",
+            "recovery_of": {
+                "prior_manifest_sha256": "db350c50e3830b8c3e2533645cb223aa97831681e7fa4b2f765303da16b24370",
+                "failed_call_ids": ["fc-01M003RA8FQDS430EXJC4GS13D"],
+                "failure_reason": "task module omitted its command-line entrypoint and exited before training",
+                "source_outputs_reused": False,
+                "source_root_mutated": False,
+            },
+        },
         "claim_label": "general visual world-model engineering pilot; no behavioral, causal, or mechanistic claim",
         "contract": {
             "spec_version": "jump.thought-experiment-spec/v2",
