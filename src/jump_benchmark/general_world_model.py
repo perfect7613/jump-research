@@ -120,6 +120,8 @@ def manifest() -> dict[str, Any]:
         },
         "execution": {
             "modal_function": "general_visual_world_model_pilot",
+            "python_version": "3.11",
+            "dependency_image": "stage_d_image with exact pinned torch/transformers/jsonschema",
             "resource": "H100",
             "gpu_count": 1,
             "max_containers": 1,

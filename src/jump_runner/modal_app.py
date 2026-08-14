@@ -917,6 +917,7 @@ def _authorize_general_world_model(*, expected_manifest_sha256: str, expected_co
 @modal.concurrent(max_inputs=1)
 def general_visual_world_model_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
     """CPU same-image dataset/schema/tiny-overfit and frozen-base config preflight."""
+    import sys
     from transformers import AutoConfig, AutoModelForMultimodalLM
     from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION
     from jump_benchmark.general_world_model import MANIFEST_SHA256, cpu_preflight
@@ -926,6 +927,7 @@ def general_visual_world_model_preflight(expected_manifest_sha256: str, expected
     model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
     return {
         "status": "passed", "manifest_sha256": MANIFEST_SHA256, "code_sha": CODE_VERSION,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "model_type": config.model_type, "model_class": model_class.__name__, "base_weights_loaded": False,
         "gpu_allocated": False, "persistent_root_created": False, "seam": cpu_preflight(),
     }
