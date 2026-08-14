@@ -13,7 +13,7 @@ export default function Home() {
         <div className="hero-copy">
           <p className="hero-kicker">A SMALL WORLD. ONE CHANGED RULE.</p>
           <h1>Run the<br /><em>counterfactual.</em></h1>
-          <p>Describe a bounded system. JUMP writes a declarative plan, records a prediction, and renders both futures side by side.</p>
+          <p>JUMP asks a simple research question: will a model change its explanation after it sees what happens in a controlled, simulated world?</p>
           <a href="#experiment">Begin experiment <span>↘</span></a>
         </div>
         <div className="hero-note"><span>ENGINE</span><strong>DETERMINISTIC / 2D</strong><span>CLAIMS</span><strong>MODEL-BOUND ONLY</strong></div>

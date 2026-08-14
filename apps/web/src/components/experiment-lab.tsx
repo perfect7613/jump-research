@@ -84,7 +84,11 @@ export function ExperimentLab() {
       <section className="question-stage" aria-labelledby="question-title">
         <div className="folio">01 / QUESTION</div>
         <h2 id="question-title">Change one rule.<br />Watch both worlds.</h2>
-        <p className="lede">A bounded thought experiment—not a claim about the real world.</p>
+        <div className="experiment-explainer">
+          <p><strong>Why run this?</strong> We compare an unchanged world with a world where one rule changes. This tests whether the result gives a model a reason to revise an inadequate explanation.</p>
+          <p><strong>What are the twelve particles?</strong> They are twelve simulated dots in a small 2D world. They begin still. Halfway through, repulsion makes the dots push apart in the changed world. Twelve is only a small number that is easy to see; it has no special scientific meaning.</p>
+          <small>The dots are not atoms, real observations, or model activations. This is a bounded thought experiment—not a claim about the real world.</small>
+        </div>
         <Textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={5} className="question-input" aria-label="Thought experiment question" />
         <div className="example-row">{examples.map((example, index) => <button key={example} onClick={() => setQuestion(example)}><span>0{index + 1}</span>{example}</button>)}</div>
         <Button size="lg" onClick={buildPlan} disabled={stage === "planning" || stage === "running"} className="primary-action">Build the plan <ArrowRight /></Button>
