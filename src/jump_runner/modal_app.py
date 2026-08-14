@@ -894,6 +894,92 @@ def authentic_world_latent_memory_bridge(expected_manifest_sha256:str,expected_c
         if result.get("status")!="completed":raise RunnerError(f"latent-memory bridge failed: {result.get('error')}")
         return result
 
+
+def _authorize_general_world_model(*, expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool, confirm_h100: bool) -> dict[str, Any]:
+    from jump_benchmark.general_world_model import MANIFEST_SHA256, manifest
+    if confirm_paid is not True or confirm_h100 is not True:
+        raise RunnerError("general world-model pilot requires literal paid and H100 confirmations")
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("general world-model immutable identity mismatch")
+    execution = manifest()["execution"]
+    forecast = execution["timeout_seconds"] / 3600 * execution["h100_rate_usd_per_hour"]
+    if (
+        execution["resource"] != "H100" or execution["gpu_count"] != 1
+        or execution["max_containers"] != 1 or execution["max_inputs"] != 1
+        or execution["max_attempts"] != 1 or abs(forecast - execution["forecast_usd"]) > 1e-9
+        or forecast > execution["aggregate_authority_ceiling_usd"]
+    ):
+        raise RunnerError("general world-model resource/cost contract mismatch")
+    return execution
+
+
+@app.function(image=stage_d_image, timeout=900, max_containers=1, name="general_visual_world_model_preflight")
+@modal.concurrent(max_inputs=1)
+def general_visual_world_model_preflight(expected_manifest_sha256: str, expected_code_sha: str) -> dict[str, Any]:
+    """CPU same-image dataset/schema/tiny-overfit and frozen-base config preflight."""
+    import sys
+    import tempfile
+    from jump_contracts import load_task_evidence
+    from transformers import AutoConfig, AutoModelForMultimodalLM
+    from jump_benchmark.authentic_stage_d import BASE_REPO_ID, BASE_REVISION
+    from jump_benchmark.general_world_model import MANIFEST_SHA256, cpu_preflight
+    if expected_manifest_sha256 != MANIFEST_SHA256 or expected_code_sha != CODE_VERSION:
+        raise RunnerError("general world-model preflight identity mismatch")
+    config = AutoConfig.from_pretrained(BASE_REPO_ID, revision=BASE_REVISION, trust_remote_code=False)
+    model_class = AutoModelForMultimodalLM._model_mapping[type(config)]
+    with tempfile.TemporaryDirectory(prefix="general-world-task-") as temporary:
+        root = Path(temporary); output = root / "output"; checkpoint = root / "checkpoint"
+        output.mkdir(); checkpoint.mkdir(); parameters = root / "parameters.json"
+        parameters.write_text(json.dumps({"expected_manifest_sha256": MANIFEST_SHA256, "expected_code_sha": CODE_VERSION}))
+        env = dict(os.environ); env["JUMP_GENERAL_WORLD_MODEL_TASK_PREFLIGHT"] = "1"
+        completed = subprocess.run(
+            [sys.executable, "-m", "jump_benchmark.general_world_model_task", "--parameters", str(parameters), "--output-dir", str(output), "--checkpoint-dir", str(checkpoint)],
+            env=env, capture_output=True, text=True, timeout=300, check=False,
+        )
+        if completed.returncode != 0:
+            raise RunnerError(f"general world-model task preflight failed: {completed.stderr[-500:]}")
+        task_result = load_task_evidence(output / "result.json")
+    return {
+        "status": "passed", "manifest_sha256": MANIFEST_SHA256, "code_sha": CODE_VERSION,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "model_type": config.model_type, "model_class": model_class.__name__, "base_weights_loaded": False,
+        "gpu_allocated": False, "persistent_root_created": False, "seam": cpu_preflight(),
+        "task_subprocess_result_schema": task_result["schema_version"],
+    }
+
+
+@app.function(
+    image=stage_d_image, gpu="H100", timeout=5400, max_containers=1,
+    volumes={str(VOLUME_PATH): volume},
+    secrets=[modal.Secret.from_name("jump-hf-read", required_keys=["HF_TOKEN"])],
+    name="general_visual_world_model_pilot",
+)
+@modal.concurrent(max_inputs=1)
+def general_visual_world_model_pilot(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool = False, confirm_h100: bool = False) -> dict[str, Any]:
+    from jump_benchmark.general_world_model import run_contract
+    _authorize_general_world_model(expected_manifest_sha256=expected_manifest_sha256, expected_code_sha=expected_code_sha, confirm_paid=confirm_paid, confirm_h100=confirm_h100)
+    root = VOLUME_PATH / "general-visual-world-model" / expected_manifest_sha256 / "run"
+    phase, run = run_contract(expected_manifest_sha256, expected_code_sha)
+    with _dispatch_lease(dispatch_leases):
+        result = execute_local_run(phase, run, root, expected_manifest_sha256); volume.commit()
+        if result.get("status") != "completed":
+            raise RunnerError(f"general world-model pilot failed: {result.get('error')}")
+        return result
+
+
+@app.local_entrypoint(name="submit-general-world-model")
+def submit_general_world_model(expected_manifest_sha256: str, expected_code_sha: str, confirm_paid: bool = False, confirm_h100: bool = False) -> None:
+    execution = _authorize_general_world_model(expected_manifest_sha256=expected_manifest_sha256, expected_code_sha=expected_code_sha, confirm_paid=confirm_paid, confirm_h100=confirm_h100)
+    call = general_visual_world_model_pilot.spawn(expected_manifest_sha256, expected_code_sha, confirm_paid=True, confirm_h100=True)
+    record = {"app_name": APP_NAME, "function": "general_visual_world_model_pilot", "call_id": call.object_id, "manifest_sha256": expected_manifest_sha256, "code_sha": expected_code_sha, "forecast_usd": execution["forecast_usd"], "hard_ceiling_usd": execution["aggregate_authority_ceiling_usd"]}
+    registry = Path(".jump/submissions"); registry.mkdir(parents=True, exist_ok=True); path = registry / f"{call.object_id}.json"
+    with path.open("x") as handle:
+        handle.write(json.dumps(record, indent=2, sort_keys=True) + "\n"); handle.flush(); os.fsync(handle.fileno())
+    directory = os.open(registry, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+    print(json.dumps({**record, "record_path": str(path)}, sort_keys=True))
+
 @app.local_entrypoint(name="submit-long-horizon")
 def submit_long_horizon(
     mode: str,
