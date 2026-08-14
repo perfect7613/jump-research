@@ -19,6 +19,7 @@ from jump_workbench.gemma_planner import (
     BASE_REPO_ID,
     BASE_REVISION,
     TRANSFORMERS_REVISION,
+    _complete_json_object_end,
     _extract_json_object,
     _generate_visual_prediction,
     _normalize_visual_prediction,
@@ -316,6 +317,10 @@ def test_visual_prediction_rejects_duplicate_or_trailing_json_and_repairs_once(m
         _extract_json_object(f"{encoded} thought {encoded}", strict_single_object=True)
     with pytest.raises(ValueError, match="text outside"):
         _extract_json_object(f"{encoded} thought", strict_single_object=True)
+    assert _complete_json_object_end(encoded + " thought " + encoded) == len(encoded)
+    quoted_brace = '{"summary":"a } inside a string","nested":{"value":1}} trailing'
+    assert _complete_json_object_end(quoted_brace) == quoted_brace.index(" trailing")
+    assert _complete_json_object_end('{"summary":"unterminated"') is None
 
     from jump_workbench import gemma_planner
 

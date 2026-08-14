@@ -92,6 +92,7 @@ def _generate_json(
     strict_single_object: bool = False,
 ) -> dict[str, Any]:
     import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
 
     tokenizer = runtime["tokenizer"]
     model = runtime["model"]
@@ -115,10 +116,54 @@ def _generate_json(
     }
     if not deterministic:
         generation.update({"temperature": 0.2, "top_p": 0.9})
+    if strict_single_object:
+        prompt_tokens = input_ids.shape[1]
+
+        class StopAfterOneJSONObject(StoppingCriteria):
+            def __call__(self, generated_ids, _scores, **_kwargs) -> bool:
+                generated_text = tokenizer.decode(
+                    generated_ids[0, prompt_tokens:],
+                    skip_special_tokens=True,
+                )
+                return _complete_json_object_end(generated_text) is not None
+
+        generation["stopping_criteria"] = StoppingCriteriaList(
+            [StopAfterOneJSONObject()]
+        )
     with torch.inference_mode():
         output = model.generate(**generation)
     text = tokenizer.decode(output[0, input_ids.shape[1] :], skip_special_tokens=True)
     return _extract_json_object(text, strict_single_object=strict_single_object)
+
+
+def _complete_json_object_end(text: str) -> int | None:
+    """Return the end offset of the first balanced top-level JSON object."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+            if depth < 0:
+                return None
+    return None
 
 
 def _extract_json_object(
