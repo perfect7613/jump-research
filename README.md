@@ -127,7 +127,7 @@ These commands use deterministic local fixtures and make no remote call. `run-lo
 
 ## Demo and artifacts
 
-A public Hugging Face Space and public model artifacts are not currently released. Links will be added here only after the public identities, licenses, and end-to-end behavior have been verified.
+The public visual thought-experiment interface lives in `apps/web`. Model artifacts remain separate from the web deployment and are linked only after their identities, licenses, and end-to-end behavior have been verified.
 
 Do not commit model weights, generated datasets, credentials, raw conversations, unrestricted logs, or third-party assets. Released artifacts must identify their base checkpoint, training objective, data provenance, limitations, hashes, and applicable license terms.
 

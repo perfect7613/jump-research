@@ -196,9 +196,13 @@ def test_queue_http_json_round_trip_preserves_exact_recomputed_estimate():
     decoded = json.loads(json.dumps({"plan": prepared.plan, "run": run}, allow_nan=False))
     assert decoded["run"]["comparisons"][0]["estimate"].hex() == "-0x1.2980000000000p+5"
 
-    from jump_ui.general_client import validate_run_response
+    from jump_workbench.coordinator import _normative_result, _sealed_result
 
-    assert validate_run_response(decoded["run"], decoded["plan"]) == decoded["run"]
+    assert validate_experiment_run(
+        decoded["run"], decoded["plan"],
+        verified_run_result=_normative_result(decoded["run"]),
+        artifact_bytes={}, sealed_result=_sealed_result(decoded["run"]),
+    ) == decoded["run"]
 
 
 def test_run_requires_plan_evidence_and_complete_row_bound_comparisons():
