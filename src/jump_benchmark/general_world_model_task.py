@@ -13,7 +13,20 @@ from .general_world_model import MANIFEST_SHA256, cpu_preflight, train_and_evalu
 def run(parameters: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     if set(parameters) != {"expected_manifest_sha256", "expected_code_sha"}:
         raise ValueError("general world-model parameters mismatch")
-    return train_and_evaluate(output_dir=output_dir, **parameters)
+    if os.environ.get("JUMP_GENERAL_WORLD_MODEL_TASK_PREFLIGHT") == "1":
+        if parameters != {
+            "expected_manifest_sha256": MANIFEST_SHA256,
+            "expected_code_sha": os.environ.get("JUMP_CODE_VERSION"),
+        }:
+            raise ValueError("general world-model dry task identity mismatch")
+        seam = cpu_preflight()
+        return write_task_evidence(
+            output_dir,
+            metrics=[{"name": "tiny_overfit_improved", "value": float(seam["tiny_overfit_improved"])}],
+            artifacts=[],
+            general_world_model={"dry_run": True, "seam": seam},
+        )
+    return train_and_evaluate(output_root=output_dir, **parameters)
 
 
 def main() -> None:
@@ -24,20 +37,6 @@ def main() -> None:
     args = parser.parse_args()
     parameters = json.loads(Path(args.parameters).read_text())
     output_dir = Path(args.output_dir)
-    if os.environ.get("JUMP_GENERAL_WORLD_MODEL_TASK_PREFLIGHT") == "1":
-        if parameters != {
-            "expected_manifest_sha256": MANIFEST_SHA256,
-            "expected_code_sha": os.environ.get("JUMP_CODE_VERSION"),
-        }:
-            raise ValueError("general world-model dry task identity mismatch")
-        seam = cpu_preflight()
-        write_task_evidence(
-            output_dir,
-            metrics=[{"name": "tiny_overfit_improved", "value": float(seam["tiny_overfit_improved"])}],
-            artifacts=[],
-            general_world_model={"dry_run": True, "seam": seam},
-        )
-        return
     run(parameters, output_dir)
 
 

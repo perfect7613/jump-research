@@ -66,9 +66,9 @@ def manifest() -> dict[str, Any]:
         "execution_lineage": {
             "state": "recovery",
             "recovery_of": {
-                "prior_manifest_sha256": "db350c50e3830b8c3e2533645cb223aa97831681e7fa4b2f765303da16b24370",
-                "failed_call_ids": ["fc-01M003RA8FQDS430EXJC4GS13D"],
-                "failure_reason": "task module omitted its command-line entrypoint and exited before training",
+                "prior_manifest_sha256": "766a8e2a2d94b0e970a40cd21f87bdf32796b92618145a0aa51b60a2a49ad88e",
+                "failed_call_ids": ["fc-01M003RA8FQDS430EXJC4GS13D", "fc-01M003X45CE1MJ9PSFJPXJZWZ8"],
+                "failure_reason": "task CLI was restored, then its live path passed output_dir instead of output_root; neither call began training",
                 "source_outputs_reused": False,
                 "source_root_mutated": False,
             },
